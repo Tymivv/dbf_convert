@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto&display=swap');
+ul{
+    padding: 0 0;
+    width: 100%;
+}
+a{
+    text-decoration: none;
+}
+body {
+    background: #666;
+    font-family: 'Roboto', sans-serif;
+}
+
+.container {
+    padding: 5rem 1rem 1rem 1rem;
+    width: 600px;
+    margin: auto auto;
+}
+
+.card {
+    border-radius: 6px;
+    background: #fff;
+    padding: 1rem;
+    box-shadow: 2px 3px 10px rgba(0, 0, 0, .2);
+    text-align: center;
+}
+
+.btn {
+    color: #42b983;
+    border-radius: 99px;
+    border: 2px solid #42b983;
+    text-decoration: none;
+    text-transform: uppercase;
+    padding: 0.5rem 1.5rem;
+    font-weight: 700;
+    outline: none;
+    background: #fff;
+    transition: all 0.22s;
+    cursor: pointer;
+    margin-right: 1rem;
+}
+
+.btn:active {
+    box-shadow: inset 1px 1px 1px rgba(0, 0, 0, 0.3);
+}
+
+.btn:hover {
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+.list{
+    height: 100%;
+    display: flex;
+    border: 2px solid #42b983;
+    border-radius: 6px;
+    font-weight: 700;
+    color: #42b983;
+    margin: 5px;
+}
+
+.firstLine{
+    color: #42b983;
+    text-align: justify;
+}
+.firstLine_title{
+    text-align: center;
+}
+.firstLine_item {
+    &:hover {
+        opacity: 0.6;
+    }
+}
+.firstLine_loading{
+    font-size:20px;
+    font-weight: 700;
+    color: #c91b27;
+}
