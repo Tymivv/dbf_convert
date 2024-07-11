@@ -1,15 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Table Converter",
-  "version": "0.2",
+  "version": "0.4",
   "description": "Application for editing and converting tables",
   "action": {
-    "default_popup": "index.html",
     "default_icon": {
       "16": "icon_16.png",
       "48": "icon_48.png",
       "128": "icon_128.png"
     }
-  }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "index.html"
 
 }
