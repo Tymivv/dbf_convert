@@ -96,7 +96,7 @@ export default function App() {
     setError(null);
   };
 
-  const exportFile = async () => {
+  const exportFile = async (type) => {
     try {
       // Формуємо дані у відповідності до збереженого порядку колонок
       const orderedData = decodedData.map(item => {
@@ -107,12 +107,25 @@ export default function App() {
         return orderedItem;
       });
 
-      const ws = utils.json_to_sheet(orderedData, { defval: "" }); // Включаємо порожні колонки
-      const wb = utils.book_new();
-      utils.book_append_sheet(wb, ws, "Data");
-      let d = new Date().getTime();
-      await writeFileXLSX(wb, `${d}.xlsx`);
-      
+      const ws = utils.json_to_sheet(orderedData, { defval: "" });
+
+      if (type === 'xlsx') {
+        const wb = utils.book_new();
+        utils.book_append_sheet(wb, ws, "Data");
+        let d = new Date().getTime();
+        await writeFileXLSX(wb, `${d}.xlsx`);
+      } else if (type === 'csv') {
+        const csv = utils.sheet_to_csv(ws); // Генеруємо CSV з аркуша
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `${new Date().getTime()}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+
       // Повертаємо форму в початковий стан після експорту
       resetForm();
     } catch (error) {
@@ -124,6 +137,7 @@ export default function App() {
     <div className={style.container}>
       <div className={style.card}>
         <h2>Table Converter</h2>
+
         <input 
           type="file" 
           className={style.btn} 
@@ -164,10 +178,19 @@ export default function App() {
         <button 
           className={style.btn}
           disabled={!tableValid || selectedEncoding === '' || loader}  // Вимикаємо кнопку, якщо умови не дотримані або завантаження
-          onClick={exportFile}
+          onClick={() => exportFile('xlsx')}
         >
           Експорт XLSX
         </button>
+
+        <button 
+          className={style.btn}
+          disabled={!tableValid || selectedEncoding === '' || loader}  // Вимикаємо кнопку, якщо умови не дотримані або завантаження
+          onClick={() => exportFile('csv')}
+        >
+          Експорт CSV
+        </button>
+
         {error && <div>{error}</div>}
         {loader && <p className={style.firstLine_loading}>loading...</p>}
         {decodedData.length > 0 && 
