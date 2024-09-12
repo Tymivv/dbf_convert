@@ -20,7 +20,7 @@ body {
 .card {
     border-radius: 6px;
     background: #fff;
-    padding: 1rem;
+    padding: 1rem 1rem 2rem 1rem;
     box-shadow: 2px 3px 10px rgba(0, 0, 0, .2);
     text-align: center;
 }
