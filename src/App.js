@@ -11,7 +11,7 @@ const decodeString = (str, encoding) => {
     const decoded = iconv.decode(buffer, encoding);
     return decoded;
   } catch (e) {
-    return str; // Якщо не вдалося декодувати, повертаємо оригінальний рядок
+    return str;
   }
 };
 
@@ -19,7 +19,7 @@ const decodeString = (str, encoding) => {
 const convertNumericKeysToStrings = (obj) => {
   const newObj = {};
   Object.keys(obj).forEach(key => {
-    const stringKey = isNaN(key) ? key : String(key); // Перетворюємо ключ на рядок, якщо він числовий
+    const stringKey = isNaN(key) ? key : String(key);
     newObj[stringKey] = obj[key];
   });
   return newObj;
@@ -32,12 +32,12 @@ export default function App() {
   const [tableValid, setTableValid] = useState(false);
   const [selectedEncoding, setSelectedEncoding] = useState('');
   const [decodedData, setDecodedData] = useState([]);
-  const [columnOrder, setColumnOrder] = useState([]); // Збереження порядку колонок
+  const [columnOrder, setColumnOrder] = useState([]);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
     if (selectedEncoding === '0') {
-      setDecodedData(table); // Використовуємо оригінальну таблицю без декодування
+      setDecodedData(table);
       return;
     }
 
@@ -71,14 +71,29 @@ export default function App() {
       const ws = wb.Sheets[wb.SheetNames[0]];
       const jsonData = utils.sheet_to_json(ws, { defval: "" });
 
-      // Перетворюємо всі числові ключі на рядкові
-      const convertedData = jsonData.map(item => convertNumericKeysToStrings(item));
-      setTable(convertedData);
+      // обробка даних для обробки полів дати
+      const processedData = jsonData.map(item => {
+        const newItem = {};
+        for (const key in item) {
+          if (item[key] instanceof Date) {
+              if (item[key].getTime() === -2211760924000) {
+              newItem[key] = null;
+            } else {
+              newItem[key] = item[key];
+            }
+          } else if (typeof item[key] === 'string' && item[key] === '') {
+            newItem[key] = null;
+          } else {
+            newItem[key] = item[key];
+          }
+        }
+        return convertNumericKeysToStrings(newItem);
+      });
+      setTable(processedData);
 
       // Зберігаємо порядок колонок без сортування
-      const firstRowKeys = Object.keys(convertedData[0]);
-      setColumnOrder(firstRowKeys); // Зберігаємо порядок колонок у масиві
-
+      const firstRowKeys = Object.keys(processedData[0]);
+      setColumnOrder(firstRowKeys);
       setLoader(false);
       setError(null);
     } catch (error) {
@@ -92,7 +107,7 @@ export default function App() {
     setDecodedData([]);
     setSelectedEncoding('');
     setTableValid(false);
-    setColumnOrder([]); // Очищаємо порядок колонок
+    setColumnOrder([]);
     setError(null);
   };
 
@@ -102,20 +117,33 @@ export default function App() {
       const orderedData = decodedData.map(item => {
         const orderedItem = {};
         columnOrder.forEach((key) => {
-          orderedItem[key] = item[key] !== undefined ? item[key] : ''; // Слідкуємо за тим, щоб не втратити порожні значення
+          if (item[key] instanceof Date) {
+            if (isNaN(item[key].getTime())) {
+              orderedItem[key] = ''; // порожня дата
+            } else {
+              // Форматувати дату як «дд.мм.рррр»  
+              let d = item[key];
+              let day = String(d.getDate()).padStart(2, '0');
+              let month = String(d.getMonth() + 1).padStart(2, '0');
+              let year = d.getFullYear();
+              orderedItem[key] = `${day}.${month}.${year}`;
+            }
+          } else {
+            orderedItem[key] = item[key] !== undefined ? item[key] : '';
+          }
         });
         return orderedItem;
       });
 
-      const ws = utils.json_to_sheet(orderedData, { defval: "" });
-
+      // Видалити опцію cellDates, щоб запобігти неправильному тлумаченню рядків дат
+      const ws = utils.json_to_sheet(orderedData, { defval: '' });
       if (type === 'xlsx') {
         const wb = utils.book_new();
         utils.book_append_sheet(wb, ws, "Data");
         let d = new Date().getTime();
         await writeFileXLSX(wb, `${d}.xlsx`);
       } else if (type === 'csv') {
-        const csv = utils.sheet_to_csv(ws); // Генеруємо CSV з аркуша
+        const csv = utils.sheet_to_csv(ws);
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -144,12 +172,12 @@ export default function App() {
           style={{ display: 'none' }}
           ref={fileInputRef}
           onChange={importFile}
-          disabled={loader}  // Вимикаємо кнопку під час завантаження
+          disabled={loader}
         />
         <button 
           className={style.btn} 
           onClick={openFileInput}
-          disabled={loader}  // Вимикаємо кнопку під час завантаження
+          disabled={loader}
         >
           вибрати
         </button>
@@ -158,7 +186,7 @@ export default function App() {
           className={style.btn}
           value={selectedEncoding} 
           onChange={(e) => setSelectedEncoding(e.target.value)}
-          disabled={loader}  // Вимикаємо кнопку під час завантаження
+          disabled={loader}
         >
           <option value="" disabled>виберіть кодування</option>
           <option value="utf-8">UTF-8</option>
@@ -177,7 +205,7 @@ export default function App() {
 
         <button 
           className={style.btn}
-          disabled={!tableValid || selectedEncoding === '' || loader}  // Вимикаємо кнопку, якщо умови не дотримані або завантаження
+          disabled={!tableValid || selectedEncoding === '' || loader}
           onClick={() => exportFile('xlsx')}
         >
           Експорт XLSX
@@ -185,7 +213,7 @@ export default function App() {
 
         <button 
           className={style.btn}
-          disabled={!tableValid || selectedEncoding === '' || loader}  // Вимикаємо кнопку, якщо умови не дотримані або завантаження
+          disabled={!tableValid || selectedEncoding === '' || loader}
           onClick={() => exportFile('csv')}
         >
           Експорт CSV
@@ -196,7 +224,7 @@ export default function App() {
         {decodedData.length > 0 && 
           <div className={style.firstLine}>
             <h2 className={style.firstLine_title}>First line</h2>
-            {columnOrder.map((key) => (  // Відображаємо колонки в збереженому порядку
+            {columnOrder.map((key) => (
               <p className={style.firstLine_item} key={key}>
                 {`${key}: ${decodedData[0][key] !== '' ? decodedData[0][key] : 'немає даних'}`}
               </p>
