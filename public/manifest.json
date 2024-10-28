@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Table Converter",
-  "version": "0.7",
+  "version": "0.8",
   "description": "Application for editing and converting tables",
   "action": {
     "default_icon": {

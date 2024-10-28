@@ -1,14 +1,20 @@
+
 import React, { useState, useRef, useEffect } from "react";
-import { read, utils, writeFileXLSX } from 'xlsx';
-import style from './app.module.css';
+import * as XLSX from 'xlsx'; // Імпорт XLSX
+import { read, utils, writeFileXLSX } from 'xlsx'; // Імпорт функцій з xlsx
+import * as cptable from 'codepage'; // Імпорт таблиць кодувань
 import iconv from 'iconv-lite';
+import style from './app.module.css';
 import { Buffer } from 'buffer';
 window.Buffer = window.Buffer || require("buffer").Buffer;
+
+// XLSX.set_cptable(cptable); // Завантаження таблиці кодувань
 
 const decodeString = (str, encoding) => {
   try {
     const buffer = Buffer.from(str, 'binary');
     const decoded = iconv.decode(buffer, encoding);
+    console.log(decoded);
     return decoded;
   } catch (e) {
     return str;
@@ -33,6 +39,8 @@ export default function App() {
   const [selectedEncoding, setSelectedEncoding] = useState('');
   const [decodedData, setDecodedData] = useState([]);
   const [columnOrder, setColumnOrder] = useState([]);
+  const [useCptable, setUseCptable] = useState(false); // Стан для вибору cptable
+
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -67,8 +75,15 @@ export default function App() {
     const file = e.target.files[0];
     try {
       const data = await file.arrayBuffer();
-      const wb = read(data);
+       // Якщо користувач обрав cptable, встановлюємо кодування
+      if (useCptable) {
+        XLSX.set_cptable(cptable);
+      }
+      // Виконуємо зчитування файлу
+      const wb = read(data, { type: 'array', raw: true, codepage: useCptable ? 866 : undefined });
+      console.log(wb);
       const ws = wb.Sheets[wb.SheetNames[0]];
+      console.log(ws);
       const jsonData = utils.sheet_to_json(ws, { defval: "" });
 
       // обробка даних для обробки полів дати
@@ -160,12 +175,17 @@ export default function App() {
       setError(`Помилка експорту: ${error.message}`);
     }
   };
-
+  const handleCptableChange = (e) => {
+    setUseCptable(e.target.checked);
+  };
   return (
     <div className={style.container}>
       <div className={style.card}>
-        <h2>Table Converter</h2>
-
+        <h1>Table Converter</h1>
+        <div className={style.codingChec}>
+          <input type="checkbox" checked={useCptable} onChange={handleCptableChange} />
+          <span>підібрати кодування</span>
+        </div>
         <input 
           type="file" 
           className={style.btn} 
