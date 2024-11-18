@@ -1,14 +1,27 @@
 {
   "manifest_version": 3,
   "name": "Table Converter",
-  "version": "0.8",
+  "version": "0.9",
   "description": "Application for editing and converting tables",
+  "permissions": [
+    "identity",
+    "storage",
+    "activeTab"
+  ],
   "action": {
     "default_icon": {
       "16": "icon_16.png",
       "48": "icon_48.png",
       "128": "icon_128.png"
     }
+  },
+  "oauth2": {
+    "client_id": "418488463167-2d6de9b2tl9nmbugpe18a1o9jslprip5.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
+    ]
   },
   "background": {
     "service_worker": "background.js"

@@ -1,3 +1,4 @@
+import GoogleSheetUploader from './GoogleSheetUploader/GoogleSheetUploader';
 
 import React, { useState, useRef, useEffect } from "react";
 import * as XLSX from 'xlsx'; // Імпорт XLSX
@@ -8,13 +9,13 @@ import style from './app.module.css';
 import { Buffer } from 'buffer';
 window.Buffer = window.Buffer || require("buffer").Buffer;
 
+
 // XLSX.set_cptable(cptable); // Завантаження таблиці кодувань
 
 const decodeString = (str, encoding) => {
   try {
     const buffer = Buffer.from(str, 'binary');
     const decoded = iconv.decode(buffer, encoding);
-    console.log(decoded);
     return decoded;
   } catch (e) {
     return str;
@@ -81,9 +82,7 @@ export default function App() {
       }
       // Виконуємо зчитування файлу
       const wb = read(data, { type: 'array', raw: true, codepage: useCptable ? 866 : undefined });
-      console.log(wb);
       const ws = wb.Sheets[wb.SheetNames[0]];
-      console.log(ws);
       const jsonData = utils.sheet_to_json(ws, { defval: "" });
 
       // обробка даних для обробки полів дати
@@ -159,6 +158,7 @@ export default function App() {
         await writeFileXLSX(wb, `${d}.xlsx`);
       } else if (type === 'csv') {
         const csv = utils.sheet_to_csv(ws);
+        console.log(csv);
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -178,6 +178,7 @@ export default function App() {
   const handleCptableChange = (e) => {
     setUseCptable(e.target.checked);
   };
+
   return (
     <div className={style.container}>
       <div className={style.card}>
@@ -239,6 +240,7 @@ export default function App() {
           Експорт CSV
         </button>
 
+        <GoogleSheetUploader dataArray={decodedData} />
         {error && <div>{error}</div>}
         {loader && <p className={style.firstLine_loading}>loading...</p>}
         {decodedData.length > 0 && 
