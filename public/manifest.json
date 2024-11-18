@@ -16,7 +16,7 @@
     }
   },
   "oauth2": {
-    "client_id": "418488463167-2d6de9b2tl9nmbugpe18a1o9jslprip5.apps.googleusercontent.com",
+    "client_id": "418488463167-8otn3mu2f8ueaj5v4p1juc1kolss16bb.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/userinfo.email",
@@ -26,6 +26,11 @@
   "background": {
     "service_worker": "background.js"
   },
-  "options_page": "index.html"
+  "options_page": "index.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  }
+
+
 
 }
