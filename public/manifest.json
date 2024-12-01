@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Table Converter",
-  "version": "0.9",
+  "version": "0.12",
   "description": "Application for editing and converting tables",
   "permissions": [
     "identity",
@@ -16,7 +16,7 @@
     }
   },
   "oauth2": {
-    "client_id": "418488463167-8otn3mu2f8ueaj5v4p1juc1kolss16bb.apps.googleusercontent.com",
+    "client_id": "418488463167-2d6de9b2tl9nmbugpe18a1o9jslprip5.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/userinfo.email",

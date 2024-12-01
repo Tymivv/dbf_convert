@@ -41,6 +41,8 @@ export default function App() {
   const [decodedData, setDecodedData] = useState([]);
   const [columnOrder, setColumnOrder] = useState([]);
   const [useCptable, setUseCptable] = useState(false); // Стан для вибору cptable
+  const [uploadedFileName, setUploadedFileName] = useState(''); //назва файла
+
 
   const fileInputRef = useRef(null);
 
@@ -49,7 +51,6 @@ export default function App() {
       setDecodedData(table);
       return;
     }
-
     const decodeObject = (obj) => {
       const decodedObj = {};
       for (const key in obj) {
@@ -74,6 +75,7 @@ export default function App() {
   const importFile = async (e) => {
     setLoader(true);
     const file = e.target.files[0];
+    setUploadedFileName(file.name); // Збереження імені файла
     try {
       const data = await file.arrayBuffer();
        // Якщо користувач обрав cptable, встановлюємо кодування
@@ -151,11 +153,11 @@ export default function App() {
 
       // Видалити опцію cellDates, щоб запобігти неправильному тлумаченню рядків дат
       const ws = utils.json_to_sheet(orderedData, { defval: '' });
+      const baseFileName = uploadedFileName.split('.').slice(0, -1).join('.') || 'exported_file'; // Видаляє розширення з імені фала
       if (type === 'xlsx') {
         const wb = utils.book_new();
         utils.book_append_sheet(wb, ws, "Data");
-        let d = new Date().getTime();
-        await writeFileXLSX(wb, `${d}.xlsx`);
+        await writeFileXLSX(wb, `${baseFileName}.xlsx`);
       } else if (type === 'csv') {
         const csv = utils.sheet_to_csv(ws);
         console.log(csv);
@@ -163,7 +165,7 @@ export default function App() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.setAttribute("href", url);
-        link.setAttribute("download", `${new Date().getTime()}.csv`);
+        link.setAttribute("download", `${baseFileName}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
