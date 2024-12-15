@@ -43,8 +43,6 @@ export default function App() {
   const [useCptable, setUseCptable] = useState(false); // Стан для вибору cptable
   const [uploadedFileName, setUploadedFileName] = useState(''); //назва файла
   const [currentIndex, setCurrentIndex] = useState(0); //номер рядка
-  const [isEditing, setIsEditing] = useState(false); // Режим редагування
-
 
 
   const fileInputRef = useRef(null);
@@ -88,22 +86,7 @@ export default function App() {
       // Виконуємо зчитування файлу
       const wb = read(data, { type: 'array', raw: true, codepage: useCptable ? 866 : undefined });
       const ws = wb.Sheets[wb.SheetNames[0]];
-    
-
-
       const jsonData = utils.sheet_to_json(ws, { defval: "" });
-      if (!jsonData || jsonData.length === 0) {
-        setError("Обраний файл порожній")
-        // Якщо немає даних, створюємо порожню таблицю
-        // const columns = ws ? Object.keys(utils.sheet_to_json(ws, { header: 1 })[0] || {}) : [];
-        // const emptyTable = columns.length > 0 ? [columns.reduce((acc, col) => ({ ...acc, [col]: "" }), {})] : [];
-        // setTable(emptyTable);
-        // setDecodedData(emptyTable);
-        // setColumnOrder(columns);
-        setLoader(false);
-        // setError(null);
-        return;
-      }
 
       // обробка даних для обробки полів дати
       const processedData = jsonData.map(item => {
@@ -178,6 +161,7 @@ export default function App() {
         await writeFileXLSX(wb, `${baseFileName}.xlsx`);
       } else if (type === 'csv') {
         const csv = utils.sheet_to_csv(ws);
+        console.log(csv);
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -217,40 +201,6 @@ export default function App() {
   // if (!decodedData.length) {
   //   return <div>Дані відсутні</div>;
   // }
-
-  const handleInputChange = (key, value) => {
-    // Оновлення запису напряму в масиві через індекс
-    setDecodedData((prev) => {
-      const updatedData = [...prev];
-      updatedData[currentIndex] = {
-        ...updatedData[currentIndex],
-        [key]: value,
-      };
-      return updatedData;
-    });
-  };
-
-  const saveChanges = () => {
-    setIsEditing(false); // Вихід з режиму редагування
-  };
-
-    // Динамічне створення нового запису
-    const createNewRecord = () => {
-      if (decodedData.length === 0) return {}; // Якщо даних немає, створюємо порожній об'єкт
-      const firstRecord = decodedData[0];
-      return Object.keys(firstRecord).reduce((newRecord, key) => {
-        newRecord[key] = key === "id" ? decodedData.length + 1 : ""; // Генеруємо новий ID
-        return newRecord;
-      }, {});
-    };
-
-    const addNewRecord = () => {
-      const newRecord = createNewRecord(); // Динамічне створення нового запису
-      setDecodedData((prev) => [...prev, newRecord]);
-      setCurrentIndex(decodedData.length); // Перемикаємося на новий запис
-      setIsEditing(true); // Включаємо режим редагування
-    };
-
 
   const currentRow = decodedData[currentIndex] || {};
 
@@ -315,14 +265,14 @@ export default function App() {
           Експорт CSV
         </button>
         <GoogleSheetUploader dataArray={decodedData} />
-        {error && <div className={style.text_error}>{error}</div>}
+        {error && <div>{error}</div>}
         {loader && <p className={style.firstLine_loading}>loading...</p>}
         {decodedData.length > 0 && 
         <>
         <div>
-          <h3>{isEditing ? "Редагування запису: " : "Перегляд запису: "} {currentIndex+1}</h3>
+          <h3>Current Record: {currentIndex+1}</h3>
         <div>
-        <button className={style.btn_nav} onClick={goToFirst} disabled={currentIndex === 0}>
+        <button onClick={goToFirst} disabled={currentIndex === 0}>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 24 24"
@@ -332,7 +282,7 @@ export default function App() {
             <path d="M6 12L18 4v16L6 12zm-2 0l10 7V5L4 12z" />
           </svg>
         </button>
-        <button className={style.btn_nav} onClick={goToPrevious} disabled={currentIndex === 0}>
+        <button onClick={goToPrevious} disabled={currentIndex === 0}>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 24 24"
@@ -345,7 +295,7 @@ export default function App() {
         <span>
           {currentIndex + 1} / {decodedData.length}
         </span>
-        <button className={style.btn_nav} onClick={goToNext} disabled={currentIndex === decodedData.length - 1}>
+        <button onClick={goToNext} disabled={currentIndex === decodedData.length - 1}>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 24 24"
@@ -355,7 +305,7 @@ export default function App() {
             <path d="M9 5l7 7-7 7V5z" />
           </svg>
         </button>
-        <button className={style.btn_nav} onClick={goToLast} disabled={currentIndex === decodedData.length - 1}>
+        <button onClick={goToLast} disabled={currentIndex === decodedData.length - 1}>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 24 24"
@@ -365,38 +315,16 @@ export default function App() {
             <path d="M18 12L6 20V4l12 8zm2 0L10 5v14l10-7z" />
           </svg>
         </button>
-          <div>
-            {isEditing ? (
-              <button className={style.btn_edit} onClick={saveChanges}>Зберегти</button>
-              ) : (
-              <button className={style.btn_edit} onClick={() => setIsEditing(true)}>Редагувати дані</button>
-              )}
-              <button className={style.btn_edit} onClick={addNewRecord}>Додати запис</button>
-        </div>
       </div>
     </div>
     {Object.entries(currentRow).map(([key, value]) => (
-        <div className={style.firstLine} key={key}>
-          <strong>{key}: </strong>
-          {isEditing ? (
-            <input
-              type="text"
-              value={value instanceof Date ? value.toLocaleDateString() : value || ""}
-              onChange={(e) => handleInputChange(key, e.target.value)}
-            />
-          ) : (
-            <span>{value instanceof Date ? value.toLocaleDateString() : value || "немає даних"}</span>
-          )}
-        </div>
-      ))}
-    {/* {Object.entries(currentRow).map(([key, value]) => (
   <div className={style.firstLine} key={key}>
     <strong>{key}: </strong> 
     {value instanceof Date ? value.toLocaleDateString() : value}
   </div>
-    ))} */}
+    ))}
     </>}
-        {/* {decodedData.length > 0 && 
+        {decodedData.length > 0 && 
           <div className={style.firstLine}>
             <h2 className={style.firstLine_title}>First line</h2>
             {columnOrder.map((key) => (
@@ -404,7 +332,7 @@ export default function App() {
                 {`${key}: ${decodedData[0][key] !== '' ? decodedData[0][key] : 'немає даних'}`}
               </p>
             ))}
-          </div>} */}
+          </div>}
       </div>
     </div>
   );

@@ -63,6 +63,10 @@ body {
 .firstLine{
     color: #42b983;
     text-align: justify;
+    margin: 5px;
+    &:hover {
+        opacity: 0.6;
+    }
 }
 .firstLine_title{
     text-align: center;
@@ -93,3 +97,24 @@ body {
     cursor: pointer;
 
 } 
+
+.btn_nav{
+    display: inline-grid;
+    justify-content: center;
+    align-items: center;
+    margin: 5px;
+    border-radius: 15px;
+}
+
+.btn_edit{
+    border-radius: 15px;
+    margin: 5px;
+    padding: 5px;
+}
+
+.text_error{
+    margin: 10px;
+    color: #c91b27;
+    font-weight: 700;
+    font-size: 30px;
+}
