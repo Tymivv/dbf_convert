@@ -1,20 +1,33 @@
-import GoogleSheetUploader from './GoogleSheetUploader/GoogleSheetUploader';
-
 import React, { useState, useRef, useEffect } from "react";
-import * as XLSX from 'xlsx'; // Імпорт XLSX
-import { read, utils, writeFileXLSX } from 'xlsx'; // Імпорт функцій з xlsx
-import * as cptable from 'codepage'; // Імпорт таблиць кодувань
-import iconv from 'iconv-lite';
-import style from './app.module.css';
-import { Buffer } from 'buffer';
+import * as XLSX from "xlsx";
+import Modal from 'react-modal';
+import { read, utils, writeFileXLSX } from "xlsx";
+import * as cptable from "codepage";
+import iconv from "iconv-lite";
+import { Buffer } from "buffer";
+import { saveAs } from "file-saver";
+import GoogleSheetUploader from "./GoogleSheetUploader/GoogleSheetUploader";
+import style from "./app.module.css";
+
+
+// Запобігаємо проблемам із Buffer у браузері
 window.Buffer = window.Buffer || require("buffer").Buffer;
 
-
-// XLSX.set_cptable(cptable); // Завантаження таблиці кодувань
+// ----------------------------------------------------------------------------
+// Допоміжні функції (декодування, перевірка дат, чисел тощо)
+// ----------------------------------------------------------------------------
+const convertNumericKeysToStrings = (obj) => {
+  const newObj = {};
+  Object.keys(obj).forEach((key) => {
+    const stringKey = isNaN(key) ? key : String(key);
+    newObj[stringKey] = obj[key];
+  });
+  return newObj;
+};
 
 const decodeString = (str, encoding) => {
   try {
-    const buffer = Buffer.from(str, 'binary');
+    const buffer = Buffer.from(str, "binary");
     const decoded = iconv.decode(buffer, encoding);
     return decoded;
   } catch (e) {
@@ -22,162 +35,428 @@ const decodeString = (str, encoding) => {
   }
 };
 
-// Перетворення числових ключів на рядкові
-const convertNumericKeysToStrings = (obj) => {
-  const newObj = {};
-  Object.keys(obj).forEach(key => {
-    const stringKey = isNaN(key) ? key : String(key);
-    newObj[stringKey] = obj[key];
-  });
-  return newObj;
+const isDate = (value) => {
+  if (typeof value !== "string") return false;
+  const dateFormats = [
+    /^\d{2}\.\d{2}\.\d{4}$/, // DD.MM.YYYY
+    /^\d{1,2}\/\d{1,2}\/\d{2,4}$/, // M/D/YY or MM/DD/YYYY
+  ];
+  return dateFormats.some((regex) => regex.test(value));
 };
 
+const isNumeric = (value) => {
+  if (value === null || value === undefined) return false;
+  const normalizedValue = value.toString().replace(",", ".");
+  return !isNaN(parseFloat(normalizedValue)) && isFinite(normalizedValue);
+};
+
+const getNumberSizeAndDecimal = (value) => {
+  const normalizedValue = value.toString().replace(",", ".");
+  const numValue = parseFloat(normalizedValue);
+  if (isNaN(numValue)) {
+    return { size: 10, decimal: 0 };
+  }
+  const decimalDigits = (normalizedValue.split(".")[1] || "").length;
+  const formattedValue = numValue.toFixed(decimalDigits);
+  const size = formattedValue.replace(".", "").length + (decimalDigits > 0 ? 1 : 0);
+  return { size: size > 20 ? 20 : size, decimal: decimalDigits };
+};
+
+const formatDateForDbf = (value) => {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    const year = value.getFullYear().toString();
+    const month = ("0" + (value.getMonth() + 1)).slice(-2);
+    const day = ("0" + value.getDate()).slice(-2);
+    return `${year}${month}${day}`;
+  }
+  // Якщо рядок
+  let dateObj;
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(value)) {
+    const [day, month, year] = value.split(".");
+    dateObj = new Date(`${year}-${month}-${day}`);
+  } else if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(value)) {
+    const [m, d, y] = value.split("/");
+    const fullYear = y.length === 2 ? `20${y}` : y;
+    dateObj = new Date(`${fullYear}-${m}-${d}`);
+  } else {
+    return "00000000";
+  }
+  if (isNaN(dateObj.getTime())) {
+    return "00000000";
+  }
+  const year = dateObj.getFullYear().toString();
+  const month = ("0" + (dateObj.getMonth() + 1)).slice(-2);
+  const day = ("0" + dateObj.getDate()).slice(-2);
+  return `${year}${month}${day}`;
+};
+
+// ----------------------------------------------------------------------------
+// Парсинг DBF (читаємо заголовок, поля і записи)
+// ----------------------------------------------------------------------------
+function parseDbfFile(arrayBuffer) {
+  const view = new DataView(arrayBuffer);
+
+  const recordCount = view.getUint32(4, true);
+  const headerSize = view.getUint16(8, true);
+  const recordSize = view.getUint16(10, true);
+
+  let offset = 32;
+  const fields = [];
+
+  // Зчитуємо поля, доки не натрапимо на 0x0D
+  while (true) {
+    if (view.getUint8(offset) === 0x0d) {
+      break;
+    }
+    const nameBytes = [];
+    for (let i = 0; i < 10; i++) {
+      const b = view.getUint8(offset + i);
+      if (b !== 0) {
+        nameBytes.push(b);
+      }
+    }
+    const fieldName = iconv
+      .decode(Buffer.from(nameBytes), "ascii")
+      .replace(/\0+$/, "");
+
+    const fieldType = String.fromCharCode(view.getUint8(offset + 11));
+    const fieldLength = view.getUint8(offset + 16);
+    const fieldDecimal = view.getUint8(offset + 17);
+
+    fields.push({
+      name: fieldName,
+      type: fieldType,
+      size: fieldLength,
+      decimal: fieldDecimal,
+    });
+
+    offset += 32;
+  }
+
+  let recordsOffset = headerSize;
+  const rows = [];
+
+  for (let r = 0; r < recordCount; r++) {
+    const deletedFlag = view.getUint8(recordsOffset);
+    if (deletedFlag === 0x2a) {
+      // Пропускаємо "видалений" запис
+      recordsOffset += recordSize;
+      continue;
+    }
+    let recDataOffset = recordsOffset + 1; 
+    const rowObj = {};
+
+    for (let f of fields) {
+      const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, f.size);
+      recDataOffset += f.size;
+
+      let rawText = iconv.decode(Buffer.from(rawBytes), "cp866").trim();
+
+      if (f.type === "N") {
+        if (rawText === "") {
+          rowObj[f.name] = null;
+        } else {
+          const val = parseFloat(rawText);
+          rowObj[f.name] = isNaN(val) ? rawText : val;
+        }
+      } else if (f.type === "D") {
+        if (rawText.length === 8) {
+          const yyyy = rawText.substring(0, 4);
+          const mm = rawText.substring(4, 6);
+          const dd = rawText.substring(6, 8);
+          rowObj[f.name] = `${dd}.${mm}.${yyyy}`;
+        } else {
+          rowObj[f.name] = rawText;
+        }
+      } else {
+        // C / L / інше
+        rowObj[f.name] = rawText;
+      }
+    }
+
+    rows.push(rowObj);
+    recordsOffset += recordSize;
+  }
+
+  return { fields, rows };
+}
+
+// ----------------------------------------------------------------------------
+// Формування DBF (для експорту)
+// ----------------------------------------------------------------------------
+const createDbfHeader = (fields, numRecords, encoding) => {
+  const now = new Date();
+  const header = new ArrayBuffer(32 + fields.length * 32 + 1);
+  const view = new DataView(header);
+
+  view.setUint8(0, 0x03);
+  view.setUint8(1, now.getFullYear() - 1900);
+  view.setUint8(2, now.getMonth() + 1);
+  view.setUint8(3, now.getDate());
+  view.setUint32(4, numRecords, true);
+  view.setUint16(8, 32 + fields.length * 32 + 1, true);
+
+  const recordLength = fields.reduce((sum, f) => sum + f.size, 1);
+  view.setUint16(10, recordLength, true);
+
+  fields.forEach((field, index) => {
+    const name = field.name.substring(0, 10).padEnd(10, "\0");
+    const encodedName = iconv.encode(name, encoding);
+    for (let i = 0; i < 10; i++) {
+      view.setUint8(32 + index * 32 + i, encodedName[i] || 0);
+    }
+    view.setUint8(32 + index * 32 + 11, field.type.charCodeAt(0));
+    view.setUint8(32 + index * 32 + 16, field.size);
+    if (field.type === "N") {
+      view.setUint8(32 + index * 32 + 17, field.decimal || 0);
+    }
+  });
+  view.setUint8(32 + fields.length * 32, 0x0d);
+  return header;
+};
+
+const createDbfRecord = (fields, record, encoding) => {
+  const recordBuffer = new ArrayBuffer(
+    fields.reduce((sum, f) => sum + f.size, 1)
+  );
+  const view = new DataView(recordBuffer);
+
+  view.setUint8(0, 0x20);
+
+  let offset = 1;
+  fields.forEach((field) => {
+    let value = record[field.name] || "";
+    switch (field.type) {
+      case "C": {
+        const strVal = value.toString().padEnd(field.size, " ");
+        const encodedValue = iconv.encode(strVal, encoding);
+        for (let i = 0; i < field.size; i++) {
+          view.setUint8(offset + i, encodedValue[i] || 0x20);
+        }
+        break;
+      }
+      case "N": {
+        const numVal = parseFloat(value.toString().replace(",", "."));
+        const fixedVal = isNaN(numVal)
+          ? "".padStart(field.size, " ")
+          : numVal.toFixed(field.decimal || 0).padStart(field.size, " ");
+        for (let i = 0; i < field.size; i++) {
+          view.setUint8(offset + i, fixedVal.charCodeAt(i) || 0x20);
+        }
+        break;
+      }
+      case "D": {
+        const rawVal = formatDateForDbf(value);
+        for (let i = 0; i < 8; i++) {
+          view.setUint8(offset + i, rawVal.charCodeAt(i) || 0x30);
+        }
+        break;
+      }
+      case "L": {
+        const upperVal = value.toString().trim().toUpperCase();
+        const logicalValue =
+          upperVal === "TRUE" || upperVal === "T" || upperVal === "1"
+            ? "T"
+            : "F";
+        view.setUint8(offset, logicalValue.charCodeAt(0));
+        break;
+      }
+      default:
+        break;
+    }
+    offset += field.size;
+  });
+
+  return recordBuffer;
+};
+
+// ----------------------------------------------------------------------------
+// Основний компонент
+// ----------------------------------------------------------------------------
 export default function App() {
-  const [table, setTable] = useState([]);
+  // --------------------- ОСНОВНІ СТАНИ ---------------------
+  const [decodedData, setDecodedData] = useState([]); 
+  const [columnOrder, setColumnOrder] = useState([]);
+  const [tableValid, setTableValid] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+
+  // Імпорт
+  const [useCptable, setUseCptable] = useState(false);
+  const [selectedEncoding, setSelectedEncoding] = useState("");
+  const [uploadedFileName, setUploadedFileName] = useState("");
   const [loader, setLoader] = useState(false);
   const [error, setError] = useState(null);
-  const [tableValid, setTableValid] = useState(false);
-  const [selectedEncoding, setSelectedEncoding] = useState('');
-  const [decodedData, setDecodedData] = useState([]);
-  const [columnOrder, setColumnOrder] = useState([]);
-  const [useCptable, setUseCptable] = useState(false); // Стан для вибору cptable
-  const [uploadedFileName, setUploadedFileName] = useState(''); //назва файла
-  const [currentIndex, setCurrentIndex] = useState(0); //номер рядка
-  const [isEditing, setIsEditing] = useState(false); // Режим редагування
 
+  // --------------------- ПАГІНАЦІЯ ---------------------
+  const [rowsPerPage, setRowsPerPage] = useState(10); 
+  const [currentPage, setCurrentPage] = useState(0);  
 
+    // ---- ДОДАНО для модального вікна (видалення колонок) ----
+    const [showColumnModal, setShowColumnModal] = useState(false);
+
+  // Підрахунок сторінок
+  const totalPages = Math.ceil(decodedData.length / rowsPerPage);
+  const startIndex = currentPage * rowsPerPage;
+  const endIndex = startIndex + rowsPerPage;
+  const currentRows = decodedData.slice(startIndex, endIndex);
+
+  const goToFirstPage = () => setCurrentPage(0);
+  const goToPreviousPage = () =>
+    setCurrentPage((prev) => (prev > 0 ? prev - 1 : 0));
+  const goToNextPage = () =>
+    setCurrentPage((prev) => (prev < totalPages - 1 ? prev + 1 : prev));
+  const goToLastPage = () => setCurrentPage(totalPages - 1);
+
+  // Якщо змінюємо кількість рядків, повертаємось на першу сторінку
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [rowsPerPage]);
+
+ // ------------------- DBF поля -------------------
+  // поля, які підбираємо автодетектом / ручними змінами
+  const [fieldsConfig, setFieldsConfig] = useState([]);
+  // поля, які прийшли з імпортованого DBF
+  const [fieldsConfigFromDBF, setFieldsConfigFromDBF] = useState([]);
+  // прапорець «Використати поля з DBF»
+  const [useDbfFieldsFromImported, setUseDbfFieldsFromImported] = useState(false);
+  // прапорець «Автовизначення типів»
+  const [autoDetectTypes, setAutoDetectTypes] = useState(false);
+  // кодування, яким збережемо DBF
+  const [dbfEncoding, setDbfEncoding] = useState("win-1251");
+  // панель «Експорт в DBF» показувати/ховати
+  const [showDbfExport, setShowDbfExport] = useState(false);
 
   const fileInputRef = useRef(null);
 
-  useEffect(() => {
-    if (selectedEncoding === '0') {
-      setDecodedData(table);
-      return;
-    }
-    const decodeObject = (obj) => {
-      const decodedObj = {};
-      for (const key in obj) {
-        if (typeof obj[key] === 'string') {
-          decodedObj[key] = decodeString(obj[key], selectedEncoding);
-        } else {
-          decodedObj[key] = obj[key];
-        }
-      }
-      return decodedObj;
-    };
+  //  Масив, який будемо показувати користувачу у блоці DBF
+  // якщо useDbfFieldsFromImported – це fieldsConfigFromDBF
+  // інакше – fieldsConfig
+  const displayFields = useDbfFieldsFromImported ? fieldsConfigFromDBF : fieldsConfig;
 
-    const decoded = table.map(item => decodeObject(item));
-    setDecodedData(decoded);
-    setTableValid(true);
-  }, [selectedEncoding, table]);
 
+  // -------------------------------------------------------
+  // Імпорт XLSX, CSV, DBF
+  // -------------------------------------------------------
   const openFileInput = () => {
     fileInputRef.current.click();
   };
+  const closeModalExportModal = () => {
+    setShowDbfExport(false);
 
-  const importFile = async (e) => {
-    setLoader(true);
+  };
+  const handleFileImport = async (e) => {
     const file = e.target.files[0];
-    setUploadedFileName(file.name); // Збереження імені файла
+    if (!file) return;
+    setLoader(true);
+    setUploadedFileName(file.name);
+    setError(null);
     try {
+      const ext = file.name.split(".").pop().toLowerCase();
       const data = await file.arrayBuffer();
-       // Якщо користувач обрав cptable, встановлюємо кодування
-      if (useCptable) {
-        XLSX.set_cptable(cptable);
-      }
-      // Виконуємо зчитування файлу
-      const wb = read(data, { type: 'array', raw: true, codepage: useCptable ? 866 : undefined });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-    
 
-
-      const jsonData = utils.sheet_to_json(ws, { defval: "" });
-      if (!jsonData || jsonData.length === 0) {
-        setError("Обраний файл порожній")
-        // Якщо немає даних, створюємо порожню таблицю
-        // const columns = ws ? Object.keys(utils.sheet_to_json(ws, { header: 1 })[0] || {}) : [];
-        // const emptyTable = columns.length > 0 ? [columns.reduce((acc, col) => ({ ...acc, [col]: "" }), {})] : [];
-        // setTable(emptyTable);
-        // setDecodedData(emptyTable);
-        // setColumnOrder(columns);
-        setLoader(false);
-        // setError(null);
-        return;
-      }
-
-      // обробка даних для обробки полів дати
-      const processedData = jsonData.map(item => {
-        const newItem = {};
-        for (const key in item) {
-          if (item[key] instanceof Date) {
+      if (ext === "dbf") {
+        // *** Імпорт DBF ***
+        const { fields, rows } = parseDbfFile(data);
+        setFieldsConfigFromDBF(fields);
+        const colNames = fields.map((f) => f.name);
+        setColumnOrder(colNames);
+        setDecodedData(rows);
+        setTableValid(true);
+        setCurrentPage(0);
+      } else {
+        // *** Імпорт XLSX чи CSV ***
+        if (useCptable) {
+          XLSX.set_cptable(cptable);
+        }
+        const wb = read(data, {
+          type: "array",
+          raw: true,
+          codepage: useCptable ? 866 : undefined,
+        });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const jsonData = utils.sheet_to_json(ws, { defval: "" });
+        if (!jsonData || jsonData.length === 0) {
+          setError("Обраний файл порожній");
+          setLoader(false);
+          return;
+        }
+        const processedData = jsonData.map((item) => {
+          const newItem = {};
+          for (const key in item) {
+            if (item[key] instanceof Date) {
               if (item[key].getTime() === -2211760924000) {
+                newItem[key] = null;
+              } else {
+                newItem[key] = item[key];
+              }
+            } else if (typeof item[key] === "string" && item[key] === "") {
               newItem[key] = null;
             } else {
               newItem[key] = item[key];
             }
-          } else if (typeof item[key] === 'string' && item[key] === '') {
-            newItem[key] = null;
-          } else {
-            newItem[key] = item[key];
           }
-        }
-        return convertNumericKeysToStrings(newItem);
-      });
-      setTable(processedData);
-
-      // Зберігаємо порядок колонок без сортування
-      const firstRowKeys = Object.keys(processedData[0]);
-      setColumnOrder(firstRowKeys);
+          return convertNumericKeysToStrings(newItem);
+        });
+        const firstRowKeys = Object.keys(processedData[0]);
+        setColumnOrder(firstRowKeys);
+        setDecodedData(processedData);
+        setTableValid(true);
+        setCurrentPage(0);
+      }
+    } catch (err) {
+      setError(`Помилка читання файла: ${err.message}`);
+    } finally {
       setLoader(false);
-      setError(null);
-    } catch (error) {
-      setLoader(false);
-      setError(`Помилка читання файла: ${error.message}`);
     }
   };
 
-  const resetForm = () => {
-    setTable([]);
-    setDecodedData([]);
-    setSelectedEncoding('');
-    setTableValid(false);
-    setColumnOrder([]);
-    setError(null);
-  };
+  // -------------------------------------------------------
+  // Перекодування (якщо треба)
+  // -------------------------------------------------------
+  useEffect(() => {
+    if (!decodedData.length) return;
+    if (selectedEncoding === "0") {
+      // Без змін
+      return;
+    }
+    if (selectedEncoding) {
+      const reDecoded = decodedData.map((row) => {
+        const newRow = { ...row };
+        for (let k in newRow) {
+          if (typeof newRow[k] === "string") {
+            newRow[k] = decodeString(newRow[k], selectedEncoding);
+          }
+        }
+        return newRow;
+      });
+      setDecodedData(reDecoded);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEncoding]);
 
+  // -------------------------------------------------------
+  // Експорт XLSX / CSV
+  // -------------------------------------------------------
   const exportFile = async (type) => {
     try {
-      // Формуємо дані у відповідності до збереженого порядку колонок
-      const orderedData = decodedData.map(item => {
-        const orderedItem = {};
-        columnOrder.forEach((key) => {
-          if (item[key] instanceof Date) {
-            if (isNaN(item[key].getTime())) {
-              orderedItem[key] = ''; // порожня дата
-            } else {
-              // Форматувати дату як «дд.мм.рррр»  
-              let d = item[key];
-              let day = String(d.getDate()).padStart(2, '0');
-              let month = String(d.getMonth() + 1).padStart(2, '0');
-              let year = d.getFullYear();
-              orderedItem[key] = `${day}.${month}.${year}`;
-            }
-          } else {
-            orderedItem[key] = item[key] !== undefined ? item[key] : '';
-          }
+      if (!decodedData.length) return;
+      const orderedData = decodedData.map((item) => {
+        const obj = {};
+        columnOrder.forEach((c) => {
+          obj[c] = item[c] ?? "";
         });
-        return orderedItem;
+        return obj;
       });
+      const ws = utils.json_to_sheet(orderedData, { defval: "" });
+      const baseFileName =
+        uploadedFileName.split(".").slice(0, -1).join(".") || "exported_file";
 
-      // Видалити опцію cellDates, щоб запобігти неправильному тлумаченню рядків дат
-      const ws = utils.json_to_sheet(orderedData, { defval: '' });
-      const baseFileName = uploadedFileName.split('.').slice(0, -1).join('.') || 'exported_file'; // Видаляє розширення з імені фала
-      if (type === 'xlsx') {
-        const wb = utils.book_new();
-        utils.book_append_sheet(wb, ws, "Data");
-        await writeFileXLSX(wb, `${baseFileName}.xlsx`);
-      } else if (type === 'csv') {
-        const csv = utils.sheet_to_csv(ws);
+      if (type === "xlsx") {
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Data");
+        writeFileXLSX(wb, `${baseFileName}.xlsx`);
+      } else {
+        const csv = XLSX.utils.sheet_to_csv(ws);
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -187,102 +466,277 @@ export default function App() {
         link.click();
         document.body.removeChild(link);
       }
-
-      // Повертаємо форму в початковий стан після експорту
-      resetForm();
-    } catch (error) {
-      setError(`Помилка експорту: ${error.message}`);
+    } catch (err) {
+      setError(`Помилка експорту: ${err.message}`);
     }
   };
-  const handleCptableChange = (e) => {
-    setUseCptable(e.target.checked);
-  };
-//навігація між записами
-  const goToPrevious = () => {
-    setCurrentIndex((prevIndex) => Math.max(prevIndex - 1, 0));
-  };
 
-  const goToNext = () => {
-    setCurrentIndex((prevIndex) => Math.min(prevIndex + 1, decodedData.length - 1));
-  };
-
-  const goToFirst = () => {
-    setCurrentIndex(0);
-  };
-
-  const goToLast = () => {
-    setCurrentIndex(decodedData.length - 1);
+  // -------------------------------------------------------
+  // Додавання / видалення / перейменування колонок
+  // -------------------------------------------------------
+  const addColumn = () => {
+    const columnName = prompt("Введіть назву нової колонки:");
+    if (!columnName) return;
+    if (columnOrder.includes(columnName)) {
+      alert(`Колонка "${columnName}" вже існує!`);
+      return;
+    }
+    setColumnOrder((prev) => [...prev, columnName]);
+    setDecodedData((prev) =>
+      prev.map((row) => ({ ...row, [columnName]: "" }))
+    );
   };
 
-  // if (!decodedData.length) {
-  //   return <div>Дані відсутні</div>;
-  // }
+  const removeColumn = (colName) => {
+    setColumnOrder((prev) => prev.filter((c) => c !== colName));
+    setDecodedData((prev) =>
+      prev.map((row) => {
+        const newRow = { ...row };
+        delete newRow[colName];
+        return newRow;
+      })
+    );
+  };
 
-  const handleInputChange = (key, value) => {
-    // Оновлення запису напряму в масиві через індекс
+  const renameColumn = (oldName, newName) => {
+    if (!newName.trim()) {
+      alert("Назва колонки не може бути порожньою!");
+      return;
+    }
+    if (oldName === newName) return;
+    if (columnOrder.includes(newName)) {
+      alert(`Колонка "${newName}" вже існує!`);
+      return;
+    }
+    setColumnOrder((prev) => prev.map((col) => (col === oldName ? newName : col)));
+    setDecodedData((prev) =>
+      prev.map((row) => {
+        if (row.hasOwnProperty(oldName)) {
+          const newRow = { ...row, [newName]: row[oldName] };
+          delete newRow[oldName];
+          return newRow;
+        }
+        return row;
+      })
+    );
+  };
+
+  // -------------------------------------------------------
+  // Редагування / Додавання / Видалення рядків
+  // -------------------------------------------------------
+  const handleCellChange = (globalRowIndex, colName, newValue) => {
     setDecodedData((prev) => {
-      const updatedData = [...prev];
-      updatedData[currentIndex] = {
-        ...updatedData[currentIndex],
-        [key]: value,
-      };
-      return updatedData;
+      const copy = [...prev];
+      copy[globalRowIndex] = { ...copy[globalRowIndex], [colName]: newValue };
+      return copy;
     });
   };
 
-  const saveChanges = () => {
-    setIsEditing(false); // Вихід з режиму редагування
+  const addNewRecord = () => {
+    const newRow = {};
+    columnOrder.forEach((c) => {
+      newRow[c] = "";
+    });
+    setDecodedData((prev) => [...prev, newRow]);
   };
 
-    // Динамічне створення нового запису
-    const createNewRecord = () => {
-      if (decodedData.length === 0) return {}; // Якщо даних немає, створюємо порожній об'єкт
-      const firstRecord = decodedData[0];
-      return Object.keys(firstRecord).reduce((newRecord, key) => {
-        newRecord[key] = key === "id" ? decodedData.length + 1 : ""; // Генеруємо новий ID
-        return newRecord;
-      }, {});
-    };
+  const deleteRecord = (globalRowIndex) => {
+    if (!window.confirm(`Ви дійсно хочете видалити запис №${globalRowIndex + 1}?`))
+      return;
+    setDecodedData((prev) => {
+      const copy = [...prev];
+      copy.splice(globalRowIndex, 1);
+      return copy;
+    });
+  };
 
-    const addNewRecord = () => {
-      const newRecord = createNewRecord(); // Динамічне створення нового запису
-      setDecodedData((prev) => [...prev, newRecord]);
-      setCurrentIndex(decodedData.length); // Перемикаємося на новий запис
-      setIsEditing(true); // Включаємо режим редагування
-    };
+  // -------------------------------------------------------
+  // Експорт у DBF (з використанням оригінальних полів з DBF або ні)
+  // -------------------------------------------------------
 
+  const toggleDbfExport = () => {
+    if (!decodedData.length) {
+      alert("Немає даних для експорту!");
+      return;
+    }
+    setShowDbfExport((prev) => !prev);
+    if (!showDbfExport) {
+      // Якщо відкриваємо панель – ініціалізуємо fieldsConfig
+      initFieldsConfig(decodedData);
+    }
+  };
+// Коли showDbfExport або autoDetectTypes змінюються
+useEffect(() => {
+  if (showDbfExport && decodedData.length) {
+    initFieldsConfig(decodedData);
+  }
+}, [showDbfExport, autoDetectTypes, decodedData]);
+  const initFieldsConfig = (data) => {
+    if (!data.length) return;
+    const keys = Object.keys(data[0]);
+    const newConfig = keys.map((k) => {
+      const sampleValue = data[0][k] ?? "";
+      if (autoDetectTypes) {
+        if (isDate(sampleValue)) {
+          return { name: k, type: "D", size: 8, decimal: 0 };
+        } else if (isNumeric(sampleValue)) {
+          const { size, decimal } = getNumberSizeAndDecimal(sampleValue);
+          return { name: k, type: "N", size, decimal };
+        } else {
+          const length = sampleValue.toString().length;
+          return {
+            name: k,
+            type: "C",
+            size: length > 254 ? 254 : Math.max(1, length),
+            decimal: 0,
+          };
+        }
+      } else {
+        return { name: k, type: "C", size: 20, decimal: 0 };
+      }
+    });
+    setFieldsConfig(newConfig);
+  };
 
-  const currentRow = decodedData[currentIndex] || {};
+   // Користувач змінює поля, які відображаються (displayFields)
+   const handleDisplayFieldChange = (idx, field, value) => {
+    // Якщо useDbfFieldsFromImported – змінюємо fieldsConfigFromDBF
+    // інакше – fieldsConfig
+    if (useDbfFieldsFromImported) {
+      setFieldsConfigFromDBF((prev) => {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], [field]: value };
+        // Якщо змінюємо тип, робимо size=8 для "D", тощо
+        if (field === "type") {
+          if (value === "D") {
+            copy[idx].size = 8;
+            copy[idx].decimal = 0;
+          } else if (value === "L") {
+            copy[idx].size = 1;
+            copy[idx].decimal = 0;
+          } else if (value === "C") {
+            if (copy[idx].size < 1) {
+              copy[idx].size = 20;
+            }
+            copy[idx].decimal = 0;
+          }
+        }
+        return copy;
+      });
+    } else {
+      setFieldsConfig((prev) => {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], [field]: value };
+        // Якщо змінюємо тип
+        if (field === "type") {
+          if (value === "D") {
+            copy[idx].size = 8;
+            copy[idx].decimal = 0;
+          } else if (value === "L") {
+            copy[idx].size = 1;
+            copy[idx].decimal = 0;
+          } else if (value === "C") {
+            if (copy[idx].size < 1) {
+              copy[idx].size = 20;
+            }
+            copy[idx].decimal = 0;
+          }
+        }
+        return copy;
+      });
+    }
+  };
 
+  const convertToDBF = () => {
+    if (!decodedData.length) return;
+    try {
+      let finalFields = useDbfFieldsFromImported ? fieldsConfigFromDBF : fieldsConfig;
+
+      if (useDbfFieldsFromImported && fieldsConfigFromDBF?.length) {
+        // Використовуємо оригінальні поля з імпортованого DBF
+        finalFields = fieldsConfigFromDBF;
+      } else {
+        // Використовуємо автодетект/ручні поля
+        fieldsConfig.forEach((f) => {
+          f.size = parseInt(f.size, 10) || 1;
+          if (f.type === "N") {
+            f.decimal = parseInt(f.decimal, 10) || 0;
+          } else {
+            f.decimal = 0;
+          }
+        });
+        finalFields = fieldsConfig;
+      }
+
+      const header = createDbfHeader(finalFields, decodedData.length, dbfEncoding);
+      const records = decodedData.map((row) =>
+        createDbfRecord(finalFields, row, dbfEncoding)
+      );
+
+      let totalLength = header.byteLength;
+      records.forEach((r) => {
+        totalLength += r.byteLength;
+      });
+      const dbfBuffer = new ArrayBuffer(totalLength + 1);
+      const view = new DataView(dbfBuffer);
+      new Uint8Array(dbfBuffer).set(new Uint8Array(header), 0);
+      let offset = header.byteLength;
+      for (let r of records) {
+        new Uint8Array(dbfBuffer).set(new Uint8Array(r), offset);
+        offset += r.byteLength;
+      }
+      view.setUint8(totalLength, 0x1a);
+
+      if (dbfEncoding === "win-1251") {
+        view.setUint8(29, 0xc9);
+      } else if (dbfEncoding === "cp866") {
+        view.setUint8(29, 0x65);
+      }
+      const baseFileName =
+        uploadedFileName.split(".").slice(0, -1).join(".") || "exported_file";
+      const blob = new Blob([dbfBuffer], { type: "application/octet-stream" });
+      saveAs(blob, `${baseFileName}.dbf`);
+    } catch (error) {
+      console.error("Помилка конвертування в DBF:", error);
+      alert(`Помилка конвертування в DBF: ${error.message}`);
+    }
+  };
+
+  // -------------------------------------------------------
+  // Рендер
+  // -------------------------------------------------------
   return (
     <div className={style.container}>
       <div className={style.card}>
         <h1>Table Converter</h1>
-        <div className={style.codingChec}>
-          <input type="checkbox" checked={useCptable} onChange={handleCptableChange} />
-          <span>підібрати кодування</span>
+
+        {/* Файл: .xlsx, .csv, .dbf */}
+        <div>
+          <label>
+            <input
+              type="checkbox"
+              checked={useCptable}
+              onChange={(e) => setUseCptable(e.target.checked)}
+            />
+            <span>підібрати кодування</span>
+          </label>
         </div>
-        <input 
-          type="file" 
-          className={style.btn} 
-          style={{ display: 'none' }}
+
+        <input
+          type="file"
+          style={{ display: "none" }}
           ref={fileInputRef}
-          onChange={importFile}
+          onChange={handleFileImport}
           disabled={loader}
         />
-        <button 
-          className={style.btn} 
-          onClick={openFileInput}
-          disabled={loader}
-        >
-          вибрати
+        <button className={style.btn} onClick={openFileInput} disabled={loader}>
+          Вибрати файл
         </button>
-        
-        <select 
+
+        <select
           className={style.btn}
-          value={selectedEncoding} 
+          value={selectedEncoding}
           onChange={(e) => setSelectedEncoding(e.target.value)}
-          disabled={loader}
         >
           <option value="" disabled>виберіть кодування</option>
           <option value="utf-8">UTF-8</option>
@@ -299,112 +753,311 @@ export default function App() {
           <option value="0">залишити без змін</option>
         </select>
 
-        <button 
+        {/* Експорт XLSX, CSV */}
+        <button
           className={style.btn}
-          disabled={!tableValid || selectedEncoding === '' || loader}
-          onClick={() => exportFile('xlsx')}
+          onClick={() => setShowExportModal(true)}          >
+          Експортувати
+          </button>
+        {showExportModal && (
+          <Modal
+                  isOpen={showExportModal}
+                  onRequestClose={() => setShowExportModal(false)}
+                  contentLabel="Export  "
+                  ariaHideApp={false}
+                  className="Modal"
+                  overlayClassName="Overlay"
+                >
+          <button 
+          className={style.closeModal}
+          onClick={() => setShowExportModal(false)}>
+          ✖
+          </button>
+        <button
+          className={style.btn}
+          disabled={!tableValid || !decodedData.length}
+          onClick={() => exportFile("xlsx")}
         >
           Експорт XLSX
         </button>
-
-        <button 
+        <button
           className={style.btn}
-          disabled={!tableValid || selectedEncoding === '' || loader}
-          onClick={() => exportFile('csv')}
+          disabled={!tableValid || !decodedData.length}
+          onClick={() => exportFile("csv")}
         >
           Експорт CSV
         </button>
+
+        {/* Експорт DBF */}
+        <button
+          className={style.btn}
+          disabled={!tableValid || !decodedData.length}
+          onClick={toggleDbfExport}
+        >
+          Експорт в DBF
+        </button>
+
         <GoogleSheetUploader dataArray={decodedData} />
+        </Modal>
+        )}
+
         {error && <div className={style.text_error}>{error}</div>}
         {loader && <p className={style.firstLine_loading}>loading...</p>}
-        {decodedData.length > 0 && 
-        <>
-        <div>
-          <h3>{isEditing ? "Редагування запису: " : "Перегляд запису: "} {currentIndex+1}</h3>
-        <div>
-        <button className={style.btn_nav} onClick={goToFirst} disabled={currentIndex === 0}>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            width="24"
-            height="24"
-          >
-            <path d="M6 12L18 4v16L6 12zm-2 0l10 7V5L4 12z" />
-          </svg>
-        </button>
-        <button className={style.btn_nav} onClick={goToPrevious} disabled={currentIndex === 0}>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            width="24"
-            height="24"
-          >
-            <path d="M15 19l-7-7 7-7v14z" />
-          </svg>
-        </button>
-        <span>
-          {currentIndex + 1} / {decodedData.length}
-        </span>
-        <button className={style.btn_nav} onClick={goToNext} disabled={currentIndex === decodedData.length - 1}>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            width="24"
-            height="24"
-          >
-            <path d="M9 5l7 7-7 7V5z" />
-          </svg>
-        </button>
-        <button className={style.btn_nav} onClick={goToLast} disabled={currentIndex === decodedData.length - 1}>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            width="24"
-            height="24"
-          >
-            <path d="M18 12L6 20V4l12 8zm2 0L10 5v14l10-7z" />
-          </svg>
-        </button>
-          <div>
-            {isEditing ? (
-              <button className={style.btn_edit} onClick={saveChanges}>Зберегти</button>
-              ) : (
-              <button className={style.btn_edit} onClick={() => setIsEditing(true)}>Редагувати дані</button>
-              )}
-              <button className={style.btn_edit} onClick={addNewRecord}>Додати запис</button>
-        </div>
-      </div>
-    </div>
-    {Object.entries(currentRow).map(([key, value]) => (
-        <div className={style.firstLine} key={key}>
-          <strong>{key}: </strong>
-          {isEditing ? (
-            <input
-              type="text"
-              value={value instanceof Date ? value.toLocaleDateString() : value || ""}
-              onChange={(e) => handleInputChange(key, e.target.value)}
-            />
-          ) : (
-            <span>{value instanceof Date ? value.toLocaleDateString() : value || "немає даних"}</span>
-          )}
-        </div>
-      ))}
-    {/* {Object.entries(currentRow).map(([key, value]) => (
-  <div className={style.firstLine} key={key}>
-    <strong>{key}: </strong> 
-    {value instanceof Date ? value.toLocaleDateString() : value}
-  </div>
-    ))} */}
-    </>}
-        {/* {decodedData.length > 0 && 
-          <div className={style.firstLine}>
-            <h2 className={style.firstLine_title}>First line</h2>
-            {columnOrder.map((key) => (
-              <p className={style.firstLine_item} key={key}>
-                {`${key}: ${decodedData[0][key] !== '' ? decodedData[0][key] : 'немає даних'}`}
-              </p>
+
+        {/* КЕРУВАННЯ КОЛОНКАМИ */}
+        {!!decodedData.length && (
+          <div style={{ marginTop: "10px" }}>
+            <h2>Колонки</h2>
+            <button className={style.btn_colum_edit} onClick={addColumn}>Додати колонку</button>
+            <button className={style.btn_colum_edit} onClick={() => setShowColumnModal(true)}>
+                Видалити колонку
+              </button>
+          </div>
+        )}
+        {/* ----- Модальне вікно для видалення колонок ----- */}
+        {showColumnModal && (
+          <Modal
+          isOpen={showColumnModal}
+          onRequestClose={() => setShowColumnModal(false)}
+          contentLabel="delete"
+          ariaHideApp={false}
+          className="Modal"
+          overlayClassName="Overlay"
+        >
+              <button 
+              className={style.closeModal}
+                  onClick={() => setShowColumnModal(false)}>
+                    ✖
+                  </button>
+                      <h3>Видалення колонок</h3>
+                      <p>Оберіть колонку, яку потрібно видалити:</p>
+                      <ul style={{ maxHeight: '60vh', overflowY: 'auto', padding: '5px', margin: '0' }}>
+                        {columnOrder.map((col) => (
+                          <li key={col} className={style.modal_colum_list} style={{ }}>
+                            {col}{" "}
+                            <button
+                              className={style.btn_colum_delete}
+                              onClick={() => removeColumn(col)}
+                            >
+                              Видалити
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      <button className={style.btn} onClick={() => setShowColumnModal(false)}>
+                        Закрити
+                      </button>
+                  </Modal>
+                )}
+        {/* Модальне вікно для експорту в DBF */}
+        {showDbfExport && (
+                    <Modal
+                    isOpen={showExportModal}
+                    onRequestClose={() => closeModalExportModal(false)}
+                    contentLabel="Export  "
+                    ariaHideApp={false}
+                    className="Modal"
+                    overlayClassName="Overlay"
+                  >
+            <button 
+              className={style.closeModal}
+              onClick={() => closeModalExportModal(false)}>
+              ✖
+            </button>
+            <h3 className={style.list_title}>Налаштування полів DBF</h3>
+
+            {/* Якщо щось імпортували з DBF, покажемо чекбокс */}
+            {!!fieldsConfigFromDBF.length && (
+              <div className={style.autoDetect}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={useDbfFieldsFromImported}
+                  onChange={(e) => setUseDbfFieldsFromImported(e.target.checked)}
+                />
+                Використати поля імпортованого DBF
+              </label>
+              </div>
+            )}
+
+            {/* Якщо НЕ використовуємо поля з DBF – можна увімкнути автодетект */}
+            {!useDbfFieldsFromImported && (
+              <div className={style.autoDetect}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={autoDetectTypes}
+                    onChange={(e) => setAutoDetectTypes(e.target.checked)}
+                  />
+                  Автовизначення типів
+                </label>
+                </div>
+            )}
+            <div style={{ maxHeight: '60vh', overflowY: 'auto', padding: '0', margin: '0' }}>
+            {/* Відображаємо displayFields, щоб дозволити редагування */}
+            {displayFields.map((fld, idx) => (
+              <div key={idx} className={style.item} style={{ maxHeight: '60vh', overflowY: 'auto', padding: '0', margin: '0' }}>
+                <div className={style.label}>{fld.name}:</div>
+                <div className={style.select_grup}>
+                <select
+                  className={`${style.select_item} ${style.type}`}
+                  value={fld.type}
+                  onChange={(e) => handleDisplayFieldChange(idx, "type", e.target.value)}
+                >
+                  <option value="C">Character</option>
+                  <option value="N">Number</option>
+                  <option value="D">Date</option>
+                  <option value="L">Logical</option>
+                </select>
+                <input
+                  className={style.size}
+                  type="number"    
+                  value={fld.size}
+                  onChange={(e) => handleDisplayFieldChange(idx, "size", e.target.value)}
+                  readOnly={fld.type === "D" || fld.type === "L"}
+                />
+                {fld.type === "N" && (
+                  <input
+                    className={style.size}
+                    type="number"
+                    value={fld.decimal}
+                    onChange={(e) => handleDisplayFieldChange(idx, "decimal", e.target.value)}
+                  />
+                )}
+                </div>
+              </div>
             ))}
-          </div>} */}
+            </div>
+            <div className={style.encoding}>
+              <label>
+                Кодування DBF:
+                <select
+                  className={`${style.select_item} ${style.type}`}
+                  value={dbfEncoding}
+                  onChange={(e) => setDbfEncoding(e.target.value)}
+                >
+                  <option value="win-1251">windows-1251</option>
+                  <option value="cp866">cp866</option>
+                </select>
+              </label>
+              </div>
+            <div>
+            <button 
+            className={style.btn}
+            onClick={convertToDBF}>
+              Зберегти DBF
+              </button>
+              <button 
+            className={style.btn}
+            onClick={closeModalExportModal}>
+              Закрити
+              </button>
+            </div>
+            </Modal>
+        )}
+
+        {/* ВІДОБРАЖЕННЯ РЯДКІВ (пагінація) */}
+        {tableValid && columnOrder.length > 0 && (
+          <div style={{ marginTop: 20, overflowX: "auto" }}>
+            {/* Вибір кількості на сторінку */}
+            <div style={{ marginTop: 20 }}>
+              <label>
+                Показати:{" "}
+                <select
+                  value={rowsPerPage}
+                  onChange={(e) => setRowsPerPage(+e.target.value)}
+                >
+                  <option value={10}>10</option>
+                  <option value={50}>50</option>
+                  <option value={75}>75</option>
+                  <option value={100}>100</option>
+                </select>{" "}
+                записів на сторінку
+              </label>
+            </div>
+             {/* Кнопки пагінації */}
+            {decodedData.length>0  && (
+            <div style={{ marginTop: 10 }}>
+              <button onClick={goToFirstPage} disabled={currentPage === 0}>
+              🞀🞀
+              </button>
+              <button onClick={goToPreviousPage} disabled={currentPage === 0}>
+              🞀
+              </button>
+              <span style={{ margin: "0 10px" }}>
+                Сторінка {currentPage + 1} із {totalPages}
+              </span>
+              <button
+                onClick={goToNextPage}
+                disabled={currentPage === totalPages - 1 || totalPages === 0}
+              >
+                🞂
+              </button>
+              <button
+                onClick={goToLastPage}
+                disabled={currentPage === totalPages - 1 || totalPages === 0}
+              >
+                🞂🞂
+              </button>
+            </div>)}
+            {/* Таблиця без записів */}
+            
+            {/* Таблиця з поточними (currentRows) */}
+            <div className={style.tab} style={{ marginTop: 20, overflowX: "auto", maxWidth: "100%" }}>
+              <table className={style.myTable}>
+                <thead>
+                  <tr>
+                    {/* Шапка з колонками */}
+                    {columnOrder.map((col) => (
+                      <th key={col}>
+                        <input
+                          type="text"
+                          value={col}
+                          onChange={(e) => renameColumn(col, e.target.value)}
+                        />
+                      </th>
+                    ))}
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                   {/* Якщо decodedData порожній, тут буде 0 <tr> */}
+                  {currentRows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {columnOrder.map((col) => (
+                        <td key={col}>
+                          <input
+                            type="text"
+                            value={row[col] ?? ""}
+                            onChange={(e) =>
+                              handleCellChange(
+                                startIndex + rowIndex,
+                                col,
+                                e.target.value
+                              )
+                            }
+                          />
+                        </td>
+                      ))}
+                      <td>
+                        <button
+                        className={style.btn_row_delete}
+                          onClick={() => deleteRecord(startIndex + rowIndex)}
+                        >
+                          ✖
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <button className={style.btn_colum_edit} style={{ marginTop: 10 }} onClick={addNewRecord}>
+                Додати рядок
+            </button>
+          </div>
+        )}
+        
       </div>
     </div>
   );
