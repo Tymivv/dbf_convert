@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import Modal from 'react-modal';
 import { read, utils, writeFileXLSX } from "xlsx";
-import * as cptable from "codepage";
+// import * as cptable from "codepage";
 import iconv from "iconv-lite";
 import { Buffer } from "buffer";
 import { saveAs } from "file-saver";
@@ -93,7 +93,9 @@ const formatDateForDbf = (value) => {
 // ----------------------------------------------------------------------------
 // Парсинг DBF (читаємо заголовок, поля і записи)
 // ----------------------------------------------------------------------------
-function parseDbfFile(arrayBuffer) {
+// function parseDbfFile(arrayBuffer) {
+  function parseDbfFile(arrayBuffer, codePage = "cp866") {
+
   const view = new DataView(arrayBuffer);
 
   const recordCount = view.getUint32(4, true);
@@ -150,7 +152,8 @@ function parseDbfFile(arrayBuffer) {
       const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, f.size);
       recDataOffset += f.size;
 
-      let rawText = iconv.decode(Buffer.from(rawBytes), "cp866").trim();
+      // let rawText = iconv.decode(Buffer.from(rawBytes), "utf-8").trim();
+      let rawText = iconv.decode(Buffer.from(rawBytes), codePage);
 
       if (f.type === "N") {
         if (rawText === "") {
@@ -160,7 +163,9 @@ function parseDbfFile(arrayBuffer) {
           rowObj[f.name] = isNaN(val) ? rawText : val;
         }
       } else if (f.type === "D") {
-        if (rawText.length === 8) {
+        if (rawText === '        ') {  // 8 символів пробілу
+          rowObj[f.name] = '';  // або null
+        } else if (rawText.length === 8) {
           const yyyy = rawText.substring(0, 4);
           const mm = rawText.substring(4, 6);
           const dd = rawText.substring(6, 8);
@@ -246,12 +251,29 @@ const createDbfRecord = (fields, record, encoding) => {
         break;
       }
       case "D": {
-        const rawVal = formatDateForDbf(value);
-        for (let i = 0; i < 8; i++) {
-          view.setUint8(offset + i, rawVal.charCodeAt(i) || 0x30);
+        // `value` - це значення поля (рядок, Date-об’єкт тощо)
+        // Якщо value порожнє:
+        if (!value) {
+          // Пишемо "00000000" (8 байт)
+          for (let i = 0; i < 8; i++) {
+            view.setUint8(offset + i, 0x20); // ASCII 32 = ' '
+          }
+        } else {
+          // Якщо value не пусте, форматуємо дату, наприклад, "20231005" (YYYYMMDD)
+          const rawVal = formatDateForDbf(value); 
+          for (let i = 0; i < 8; i++) {
+            view.setUint8(offset + i, rawVal.charCodeAt(i) || 0x30);
+          }
         }
         break;
       }
+      // case "D": {
+      //   const rawVal = formatDateForDbf(value);
+      //   for (let i = 0; i < 8; i++) {
+      //     view.setUint8(offset + i, rawVal.charCodeAt(i) || 0x30);
+      //   }
+      //   break;
+      // }
       case "L": {
         const upperVal = value.toString().trim().toUpperCase();
         const logicalValue =
@@ -274,6 +296,9 @@ const createDbfRecord = (fields, record, encoding) => {
 // Основний компонент
 // ----------------------------------------------------------------------------
 export default function App() {
+  // --------------------- КОДОВАННЯ ДЛЯ ІНПОРТУ DBF ---------------------
+  const [dbfReadEncoding, setDbfReadEncoding] = useState("cp866");
+ 
   // --------------------- ОСНОВНІ СТАНИ ---------------------
   const [decodedData, setDecodedData] = useState([]); 
   const [columnOrder, setColumnOrder] = useState([]);
@@ -281,7 +306,7 @@ export default function App() {
   const [showExportModal, setShowExportModal] = useState(false);
 
   // Імпорт
-  const [useCptable, setUseCptable] = useState(false);
+  // const [useCptable, setUseCptable] = useState(false);
   const [selectedEncoding, setSelectedEncoding] = useState("");
   const [uploadedFileName, setUploadedFileName] = useState("");
   const [loader, setLoader] = useState(false);
@@ -356,7 +381,9 @@ export default function App() {
 
       if (ext === "dbf") {
         // *** Імпорт DBF ***
-        const { fields, rows } = parseDbfFile(data);
+        // const { fields, rows } = parseDbfFile(data);
+        const { fields, rows } = parseDbfFile(data, dbfReadEncoding);
+
         setFieldsConfigFromDBF(fields);
         const colNames = fields.map((f) => f.name);
         setColumnOrder(colNames);
@@ -365,13 +392,14 @@ export default function App() {
         setCurrentPage(0);
       } else {
         // *** Імпорт XLSX чи CSV ***
-        if (useCptable) {
-          XLSX.set_cptable(cptable);
-        }
+        // if (useCptable) {
+        //   XLSX.set_cptable(cptable);
+        // }
         const wb = read(data, {
           type: "array",
           raw: true,
-          codepage: useCptable ? 866 : undefined,
+          // codepage: useCptable ? 866 : undefined,
+          codepage: undefined,
         });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const jsonData = utils.sheet_to_json(ws, { defval: "" });
@@ -709,9 +737,17 @@ useEffect(() => {
     <div className={style.container}>
       <div className={style.card}>
         <h1>Table Converter</h1>
-
-        {/* Файл: .xlsx, .csv, .dbf */}
         <div>
+  Перед вибором DBF файла оберіть кодування:{` `}  
+  <select value={dbfReadEncoding} onChange={(e) => setDbfReadEncoding(e.target.value)}>
+    <option value="cp866">CP866 (DOS)</option>
+    <option value="windows-1251">Windows-1251</option>
+    <option value="utf-8">UTF-8</option>
+    {/* інші кодування */}
+  </select>
+</div>
+        {/* Файл: .xlsx, .csv, .dbf */}
+        {/* <div>
           <label>
             <input
               type="checkbox"
@@ -720,7 +756,7 @@ useEffect(() => {
             />
             <span>підібрати кодування</span>
           </label>
-        </div>
+        </div> */}
 
         <input
           type="file"
