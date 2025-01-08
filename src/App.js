@@ -1,14 +1,14 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect} from "react";
 import * as XLSX from "xlsx";
 import Modal from 'react-modal';
 import { read, utils, writeFileXLSX } from "xlsx";
-// import * as cptable from "codepage";
 import iconv from "iconv-lite";
+import pako from "pako";
+
 import { Buffer } from "buffer";
 import { saveAs } from "file-saver";
 import GoogleSheetUploader from "./GoogleSheetUploader/GoogleSheetUploader";
 import style from "./app.module.css";
-
 
 // Запобігаємо проблемам із Buffer у браузері
 window.Buffer = window.Buffer || require("buffer").Buffer;
@@ -119,6 +119,7 @@ const formatDateForDbf = (value) => {
     }
     const fieldName = iconv
       .decode(Buffer.from(nameBytes), "ascii")
+      // .decode(Buffer.from(nameBytes), codePage)
       .replace(/\0+$/, "");
 
     const fieldType = String.fromCharCode(view.getUint8(offset + 11));
@@ -151,9 +152,11 @@ const formatDateForDbf = (value) => {
     for (let f of fields) {
       const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, f.size);
       recDataOffset += f.size;
+      // let rawText = iconv.decode(Buffer.from(rawBytes), codePage);
 
-      // let rawText = iconv.decode(Buffer.from(rawBytes), "utf-8").trim();
-      let rawText = iconv.decode(Buffer.from(rawBytes), codePage);
+      // Використовуємо TextDecoder для декодування тексту
+      const decoder = new TextDecoder(codePage); 
+      const rawText = decoder.decode(rawBytes);
 
       if (f.type === "N") {
         if (rawText === "") {
@@ -165,6 +168,8 @@ const formatDateForDbf = (value) => {
       } else if (f.type === "D") {
         if (rawText === '        ') {  // 8 символів пробілу
           rowObj[f.name] = '';  // або null
+        } else if (rawText === '00000000') {
+          rowObj[f.name] = '';
         } else if (rawText.length === 8) {
           const yyyy = rawText.substring(0, 4);
           const mm = rawText.substring(4, 6);
@@ -251,10 +256,8 @@ const createDbfRecord = (fields, record, encoding) => {
         break;
       }
       case "D": {
-        // `value` - це значення поля (рядок, Date-об’єкт тощо)
         // Якщо value порожнє:
         if (!value) {
-          // Пишемо "00000000" (8 байт)
           for (let i = 0; i < 8; i++) {
             view.setUint8(offset + i, 0x20); // ASCII 32 = ' '
           }
@@ -292,23 +295,51 @@ const createDbfRecord = (fields, record, encoding) => {
   return recordBuffer;
 };
 
+
+// ----------------------------------------------------------------------------
+//  стиснути дані за допомогою бібліотеку pako, яка дозволяє стискати й розпаковувати дані за допомогою алгоритму GZIP.
+// ----------------------------------------------------------------------------
+const compressData = (data) => {
+  const compressed = pako.gzip(new Uint8Array(data)); // Стиснення у формат Uint8Array
+  return compressed.buffer; // Повертаємо ArrayBuffer
+};
+
+const decompressData = (compressedData) => {
+  const decompressed = pako.ungzip(new Uint8Array(compressedData)); // Декомпресія
+  return decompressed.buffer; // Повертаємо ArrayBuffer
+};
+// const compressData = (data) => {
+//   const stringifiedData = JSON.stringify(data); // Перетворення у рядок
+//   const compressed = pako.gzip(stringifiedData); // Стиснення
+//   return compressed;
+// };
+// const decompressData = (compressedData) => {
+//   const decompressed = pako.ungzip(compressedData, { to: "string" }); // Розпакування
+//   return JSON.parse(decompressed); // Перетворення назад у об'єкт
+// };
+
+// console.log(`Original data size: ${(JSON.stringify(rows).length / (1024 * 1024)).toFixed(2)} MB`);
+// const compressedData = compressData(rows);
+// console.log(`Compressed data size: ${(compressedData.byteLength / (1024 * 1024)).toFixed(2)} MB`);
+// const displayData = decompressData(compressedData);
+// console.log("Decompressed data", displayData);
+
 // ----------------------------------------------------------------------------
 // Основний компонент
 // ----------------------------------------------------------------------------
 export default function App() {
-  // --------------------- КОДОВАННЯ ДЛЯ ІНПОРТУ DBF ---------------------
-  const [dbfReadEncoding, setDbfReadEncoding] = useState("cp866");
- 
+
+  const [fileBuffer, setFileBuffer] = useState(null);     // оригінальні байти
+  const [fileExtension, setFileExtension] = useState(""); // "dbf", "xlsx", "csv", ...
+
   // --------------------- ОСНОВНІ СТАНИ ---------------------
   const [decodedData, setDecodedData] = useState([]); 
   const [columnOrder, setColumnOrder] = useState([]);
   const [tableValid, setTableValid] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
-  // Імпорт
-  // const [useCptable, setUseCptable] = useState(false);
-  const [selectedEncoding, setSelectedEncoding] = useState("");
-  const [uploadedFileName, setUploadedFileName] = useState("");
+  const [selectedEncoding, setSelectedEncoding] = useState("windows-1251"); //---випадаючий список кодувань
+  const [uploadedFileName, setUploadedFileName] = useState(""); //---назва імпортованого файла
   const [loader, setLoader] = useState(false);
   const [error, setError] = useState(null);
 
@@ -324,6 +355,7 @@ export default function App() {
   const startIndex = currentPage * rowsPerPage;
   const endIndex = startIndex + rowsPerPage;
   const currentRows = decodedData.slice(startIndex, endIndex);
+
 
   const goToFirstPage = () => setCurrentPage(0);
   const goToPreviousPage = () =>
@@ -347,7 +379,7 @@ export default function App() {
   // прапорець «Автовизначення типів»
   const [autoDetectTypes, setAutoDetectTypes] = useState(false);
   // кодування, яким збережемо DBF
-  const [dbfEncoding, setDbfEncoding] = useState("win-1251");
+  const [dbfEncoding, setDbfEncoding] = useState("windows-1251");
   // панель «Експорт в DBF» показувати/ховати
   const [showDbfExport, setShowDbfExport] = useState(false);
 
@@ -357,60 +389,82 @@ export default function App() {
   // якщо useDbfFieldsFromImported – це fieldsConfigFromDBF
   // інакше – fieldsConfig
   const displayFields = useDbfFieldsFromImported ? fieldsConfigFromDBF : fieldsConfig;
-
-
-  // -------------------------------------------------------
-  // Імпорт XLSX, CSV, DBF
-  // -------------------------------------------------------
-  const openFileInput = () => {
-    fileInputRef.current.click();
-  };
-  const closeModalExportModal = () => {
-    setShowDbfExport(false);
-
-  };
-  const handleFileImport = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setLoader(true);
-    setUploadedFileName(file.name);
-    setError(null);
-    try {
-      const ext = file.name.split(".").pop().toLowerCase();
-      const data = await file.arrayBuffer();
-
-      if (ext === "dbf") {
-        // *** Імпорт DBF ***
-        // const { fields, rows } = parseDbfFile(data);
-        const { fields, rows } = parseDbfFile(data, dbfReadEncoding);
-
-        setFieldsConfigFromDBF(fields);
-        const colNames = fields.map((f) => f.name);
-        setColumnOrder(colNames);
-        setDecodedData(rows);
-        setTableValid(true);
-        setCurrentPage(0);
-      } else {
-        // *** Імпорт XLSX чи CSV ***
-        // if (useCptable) {
-        //   XLSX.set_cptable(cptable);
-        // }
-        const wb = read(data, {
-          type: "array",
+  
+  
+  const parseFile = (buffer, ext, encoding) => {
+    // Якщо DBF
+    if (ext === "dbf") {
+      const { fields, rows } = parseDbfFile(buffer, encoding);
+      setFieldsConfigFromDBF(fields);
+      const colNames = fields.map((f) => f.name);
+      setColumnOrder(colNames);
+      setDecodedData(rows);
+      setTableValid(true);
+      setCurrentPage(0);
+          // Очищуємо локальну змінну rows
+    } else if (ext === "csv") {
+      try {
+        const decoder = new TextDecoder(encoding); 
+        const text = decoder.decode(buffer);
+        // const text = iconv.decode(new Uint8Array(buffer), encoding);
+        // 2) Читаємо csv з рядка
+        const wb = XLSX.read(text, {
+          type: "string",
           raw: true,
-          // codepage: useCptable ? 866 : undefined,
           codepage: undefined,
         });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const jsonData = utils.sheet_to_json(ws, { defval: "" });
-        if (!jsonData || jsonData.length === 0) {
+        if (!jsonData || !jsonData.length) {
           setError("Обраний файл порожній");
-          setLoader(false);
           return;
         }
-        const processedData = jsonData.map((item) => {
+        // Обробляємо можливі дати
+        const processedData = jsonData.map(item => {
           const newItem = {};
-          for (const key in item) {
+          for (let key in item) {
+            if (item[key] instanceof Date) {
+              if (item[key].getTime() === -2211760924000) {
+                newItem[key] = null;
+              } else {
+                newItem[key] = item[key];
+              }
+            } else if (typeof item[key] === "string" && item[key] === "") {
+              newItem[key] = null;
+            } else {
+              newItem[key] = item[key];
+            }
+          }
+          return   (newItem);
+        });
+
+        const firstRowKeys = Object.keys(processedData[0]);
+        setColumnOrder(firstRowKeys);
+        setDecodedData(processedData);
+        setTableValid(true);
+        setCurrentPage(0);
+      } catch (err) {
+        setError(`Помилка імпорту: ${err.message}`);
+      }
+    
+    }
+    else {
+      try {
+        const wb = read(buffer, {
+          type: "array",
+          raw: true,
+          codepage: undefined,
+        });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const jsonData = utils.sheet_to_json(ws, { defval: "" });
+        if (!jsonData || !jsonData.length) {
+          setError("Обраний файл порожній");
+          return;
+        }
+        // Обробляємо можливі дати
+        const processedData = jsonData.map(item => {
+          const newItem = {};
+          for (let key in item) {
             if (item[key] instanceof Date) {
               if (item[key].getTime() === -2211760924000) {
                 newItem[key] = null;
@@ -425,42 +479,69 @@ export default function App() {
           }
           return convertNumericKeysToStrings(newItem);
         });
+
         const firstRowKeys = Object.keys(processedData[0]);
         setColumnOrder(firstRowKeys);
         setDecodedData(processedData);
         setTableValid(true);
         setCurrentPage(0);
+      } catch (err) {
+        setError(`Помилка імпорту: ${err.message}`);
       }
-    } catch (err) {
-      setError(`Помилка читання файла: ${err.message}`);
-    } finally {
-      setLoader(false);
     }
   };
 
   // -------------------------------------------------------
-  // Перекодування (якщо треба)
+  // Імпорт XLSX, CSV, DBF
   // -------------------------------------------------------
+  const openFileInput = () => {
+    fileInputRef.current.click();
+  };
+  const closeModalExportModal = () => {
+    setShowDbfExport(false);
+
+  };
+    // Коли користувач обирає файл
+  // -------------------------------------------
+  const handleFileImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileBuffer(null)
+    setLoader(true);
+    setUploadedFileName(file.name);
+    setError(null);
+    const ext = file.name.split(".").pop().toLowerCase();
+    setFileExtension(ext);
+    try {
+      const arrayBuffer = await file.arrayBuffer(); // Отримуємо ArrayBuffer
+      const compressedData = compressData(arrayBuffer); // Стискаємо дані
+      setFileBuffer(compressedData); // Зберігаємо стиснені дані
+      // Зберігаємо оригінальний буфер і розширення
+      // setFileBuffer(compressedData);
+      // parseFile(data, ext, selectedEncoding || "cp866");
+    } catch (err) {
+      setError(`Помилка читання файла: ${err.message}`);
+    }
+    setLoader(false);
+  };
+
+  // -------------------------------------------
+  // Якщо хочемо змінювати кодування після імпорту
+  // -------------------------------------------
   useEffect(() => {
-    if (!decodedData.length) return;
-    if (selectedEncoding === "0") {
-      // Без змін
-      return;
+    if (!fileBuffer || !fileExtension) return;
+    // Очищення попередніх даних
+    setDecodedData([]);
+    let displayData
+    try {
+      displayData = decompressData(fileBuffer); // Декомпресуємо дані
+      parseFile(displayData, fileExtension, selectedEncoding); // Передаємо ArrayBuffer у parseFile
+      displayData = compressData(displayData); // Стискаємо дані
+    } catch (err) {
+      setError(`Помилка декомпресії: ${err.message}`);
     }
-    if (selectedEncoding) {
-      const reDecoded = decodedData.map((row) => {
-        const newRow = { ...row };
-        for (let k in newRow) {
-          if (typeof newRow[k] === "string") {
-            newRow[k] = decodeString(newRow[k], selectedEncoding);
-          }
-        }
-        return newRow;
-      });
-      setDecodedData(reDecoded);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEncoding]);
+      // parseFile(fileBuffer, fileExtension, selectedEncoding || "cp866");
+  }, [selectedEncoding, fileBuffer, fileExtension]);
 
   // -------------------------------------------------------
   // Експорт XLSX / CSV
@@ -634,7 +715,7 @@ useEffect(() => {
       setFieldsConfigFromDBF((prev) => {
         const copy = [...prev];
         copy[idx] = { ...copy[idx], [field]: value };
-        // Якщо змінюємо тип, робимо size=8 для "D", тощо
+        // Якщо змінюємо тип, робимо size=8 для "D"
         if (field === "type") {
           if (value === "D") {
             copy[idx].size = 8;
@@ -684,7 +765,7 @@ useEffect(() => {
         // Використовуємо оригінальні поля з імпортованого DBF
         finalFields = fieldsConfigFromDBF;
       } else {
-        // Використовуємо автодетект/ручні поля
+        // Використовуємо авто/ручні поля
         fieldsConfig.forEach((f) => {
           f.size = parseInt(f.size, 10) || 1;
           if (f.type === "N") {
@@ -737,27 +818,6 @@ useEffect(() => {
     <div className={style.container}>
       <div className={style.card}>
         <h1>Table Converter</h1>
-        <div>
-  Перед вибором DBF файла оберіть кодування:{` `}  
-  <select value={dbfReadEncoding} onChange={(e) => setDbfReadEncoding(e.target.value)}>
-    <option value="cp866">CP866 (DOS)</option>
-    <option value="windows-1251">Windows-1251</option>
-    <option value="utf-8">UTF-8</option>
-    {/* інші кодування */}
-  </select>
-</div>
-        {/* Файл: .xlsx, .csv, .dbf */}
-        {/* <div>
-          <label>
-            <input
-              type="checkbox"
-              checked={useCptable}
-              onChange={(e) => setUseCptable(e.target.checked)}
-            />
-            <span>підібрати кодування</span>
-          </label>
-        </div> */}
-
         <input
           type="file"
           style={{ display: "none" }}
@@ -774,19 +834,16 @@ useEffect(() => {
           value={selectedEncoding}
           onChange={(e) => setSelectedEncoding(e.target.value)}
         >
+
           <option value="" disabled>виберіть кодування</option>
           <option value="utf-8">UTF-8</option>
-          <option value="utf-7">UTF-7</option>
+          <option value="koi8-u">koi8-u</option>
           <option value="windows-1251">Windows-1251</option>
           <option value="windows-1252">Windows-1252</option>
           <option value="windows-1256">Windows-1256</option>
-          <option value="koi8-r">KOI8-R</option>
+          <option value="KOI8-R">KOI8-R</option>
           <option value="iso-8859-1">ISO-8859-1</option>
           <option value="cp866">cp866</option>
-          <option value="cp1251">cp1251</option>
-          <option value="cp1252">cp1252</option>
-          <option value="ibm866">ibm866</option>
-          <option value="0">залишити без змін</option>
         </select>
 
         {/* Експорт XLSX, CSV */}
@@ -972,8 +1029,9 @@ useEffect(() => {
                   value={dbfEncoding}
                   onChange={(e) => setDbfEncoding(e.target.value)}
                 >
-                  <option value="win-1251">windows-1251</option>
+                  <option value="windows-1251">windows-1251</option>
                   <option value="cp866">cp866</option>
+                  <option value="koi8-u">koi8-u</option>
                 </select>
               </label>
               </div>
@@ -1072,7 +1130,7 @@ useEffect(() => {
                                 e.target.value
                               )
                             }
-                          />
+                          /> 
                         </td>
                       ))}
                       <td>
