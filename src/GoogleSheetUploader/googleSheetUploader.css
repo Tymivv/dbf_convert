@@ -53,3 +53,9 @@
     cursor: pointer;
     opacity: 0.6;
 }
+
+
+.exportModal {
+  display: grid;
+  justify-content: center;
+}

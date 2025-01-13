@@ -37,8 +37,10 @@ body {
     background: #fff;
     transition: all 0.22s;
     cursor: pointer;
-    margin-right: 1rem;
-    margin-top: 15px;
+    /* margin-right: 1rem;
+    margin-top: 15px; */
+    margin: 5px;
+
 }
 
 .btn:active {
@@ -107,7 +109,7 @@ body {
 }
 
 .modal_colum_list{
-  margin: 5px 0; 
+  margin: 5px; 
   display:flex; 
   align-items: center;
   &:hover {
@@ -303,21 +305,21 @@ body {
 }
 
 .Modal {
-    opacity: 0;
-    transition: opacity 0.3s ease-in-out;
-    transform: translate(-50%, -26%);
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    background: white;
-    padding: 20px;
-    border-radius: 10px;
-    box-shadow: 2px 3px 10px rgba(0, 0, 0, .2);
-    max-width: 500px;
-    width: 100%;
-    text-align: center;
-    /* max-height: 80vh;
-    overflow-y: auto;  */
+  opacity: 0;
+  transition: opacity 0.3s ease-in-out;
+  transform: translate(-50%, -26%);
+  position: absolute;
+  top: 30%;
+  left: 50%;
+  background: white;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 2px 3px 10px rgba(0, 0, 0, .2);
+  max-width: 500px;
+  width: 100%;
+  text-align: center;
+  /* max-height: 80vh; */
+  /* overflow-y: auto; */
   }
   
   .Modal.ReactModal__Content--after-open {

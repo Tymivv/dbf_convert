@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Table Converter",
-  "version": "0.18",
+  "version": "0.19",
   "description": "Application for editing and converting tables",
   "permissions": [
     "identity",

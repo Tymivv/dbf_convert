@@ -564,6 +564,10 @@ export default function App() {
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Data");
         writeFileXLSX(wb, `${baseFileName}.xlsx`);
+      } else if (type === "xls") {  
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Data");
+        XLSX.writeFile(wb, `${baseFileName}.xls`, { bookType: "xls" });
       } else {
         const csv = XLSX.utils.sheet_to_csv(ws);
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -607,6 +611,7 @@ export default function App() {
     );
   };
 
+
   const renameColumn = (oldName, newName) => {
     if (!newName.trim()) {
       alert("Назва колонки не може бути порожньою!");
@@ -617,7 +622,9 @@ export default function App() {
       alert(`Колонка "${newName}" вже існує!`);
       return;
     }
-    setColumnOrder((prev) => prev.map((col) => (col === oldName ? newName : col)));
+    setColumnOrder((prev) =>
+      prev.map((col) => (col === oldName ? newName : col))
+    );
     setDecodedData((prev) =>
       prev.map((row) => {
         if (row.hasOwnProperty(oldName)) {
@@ -629,6 +636,7 @@ export default function App() {
       })
     );
   };
+  
 
   // -------------------------------------------------------
   // Редагування / Додавання / Видалення рядків
@@ -811,6 +819,26 @@ useEffect(() => {
     }
   };
 
+  const initializeNewTable = () => {
+    const columnCount = prompt("Введіть кількість колонок:", "3");
+    if (!columnCount || isNaN(columnCount) || columnCount < 1 || columnCount > 10) {
+      alert("Введіть коректну кількість колонок!");
+      return;
+    }
+  
+    const columns = [];
+    for (let i = 0; i < columnCount; i++) {
+      const columnName = prompt(`Введіть назву колонки ${i + 1}:`, `column_${i + 1}`);
+      columns.push(columnName || `column_${i + 1}`);
+    }
+  
+    setColumnOrder(columns); // Встановити порядок колонок
+    setDecodedData([]); // Початкова таблиця порожня
+    setTableValid(true); // Вмикає можливість роботи з таблицею
+    setUploadedFileName("Нова таблиця");
+  };
+  
+
   // -------------------------------------------------------
   // Рендер
   // -------------------------------------------------------
@@ -818,6 +846,14 @@ useEffect(() => {
     <div className={style.container}>
       <div className={style.card}>
         <h1>Table Converter</h1>
+        {/* <div>
+          <button
+            className={style.btn}
+            onClick={() => initializeNewTable()}
+            >
+            Створити порожню таблицю
+          </button>
+        </div> */}
         <input
           type="file"
           style={{ display: "none" }}
@@ -858,7 +894,7 @@ useEffect(() => {
                   onRequestClose={() => setShowExportModal(false)}
                   contentLabel="Export  "
                   ariaHideApp={false}
-                  className="Modal"
+                  className="Modal exportModal"
                   overlayClassName="Overlay"
                 >
           <button 
@@ -872,6 +908,13 @@ useEffect(() => {
           onClick={() => exportFile("xlsx")}
         >
           Експорт XLSX
+        </button>
+        <button
+          className={style.btn}
+          disabled={!tableValid || !decodedData.length}
+          onClick={() => exportFile("xls")}
+        >
+          Експорт XLS
         </button>
         <button
           className={style.btn}
@@ -1104,13 +1147,21 @@ useEffect(() => {
                     {/* Шапка з колонками */}
                     {columnOrder.map((col) => (
                       <th key={col}>
-                        <input
-                          type="text"
-                          value={col}
-                          onChange={(e) => renameColumn(col, e.target.value)}
-                        />
-                      </th>
-                    ))}
+                        <div
+                          contentEditable
+                          suppressContentEditableWarning
+                          onBlur={(e) => renameColumn(col, e.target.textContent.trim())}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault(); // Забороняємо перенесення рядка
+                              e.target.blur(); // Викликаємо подію onBlur, текст редагується без оновлення стану в реальному часі. Оновлення відбувається лише при завершенні редагування
+                            }
+                          }}
+                          >
+                            {col}
+                          </div>
+                        </th>
+                      ))}
                     <th></th>
                   </tr>
                 </thead>
