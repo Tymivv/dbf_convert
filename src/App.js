@@ -25,6 +25,37 @@ const convertNumericKeysToStrings = (obj) => {
   return newObj;
 };
 
+const makeUniqueColumnNames2 = (fields) => {
+  const nameCount = {};
+
+  return fields.map((field) => {
+    const originalName = field.name;
+
+    if (nameCount[originalName]) {
+      const uniqueName = `${originalName}_${nameCount[originalName]}`;
+      nameCount[originalName] += 1;
+      return { ...field, name: uniqueName };
+    } else {
+      nameCount[originalName] = 1;
+      return field; // Якщо ім'я унікальне, повертаємо поле без змін
+    }
+  });
+};
+
+// const makeUniqueColumnNames = (columns) => {
+//   const nameCount = {};
+//   return columns.map((col) => {
+//     if (nameCount[col]) {
+//       const uniqueName = `${col}_${nameCount[col]}`;
+//       nameCount[col] += 1;
+//       return uniqueName;
+//     } else {
+//       nameCount[col] = 1;
+//       return col;
+//     }
+//   });
+// };
+
 const decodeString = (str, encoding) => {
   try {
     const buffer = Buffer.from(str, "binary");
@@ -94,8 +125,8 @@ const formatDateForDbf = (value) => {
 // Парсинг DBF (читаємо заголовок, поля і записи)
 // ----------------------------------------------------------------------------
 // function parseDbfFile(arrayBuffer) {
-  function parseDbfFile(arrayBuffer, codePage = "cp866") {
 
+function parseDbfFile(arrayBuffer, codePage = "cp866") {
   const view = new DataView(arrayBuffer);
 
   const recordCount = view.getUint32(4, true);
@@ -105,7 +136,7 @@ const formatDateForDbf = (value) => {
   let offset = 32;
   const fields = [];
 
-  // Зчитуємо поля, доки не натрапимо на 0x0D
+  // Читаємо поля
   while (true) {
     if (view.getUint8(offset) === 0x0d) {
       break;
@@ -119,7 +150,6 @@ const formatDateForDbf = (value) => {
     }
     const fieldName = iconv
       .decode(Buffer.from(nameBytes), "ascii")
-      // .decode(Buffer.from(nameBytes), codePage)
       .replace(/\0+$/, "");
 
     const fieldType = String.fromCharCode(view.getUint8(offset + 11));
@@ -136,9 +166,12 @@ const formatDateForDbf = (value) => {
     offset += 32;
   }
 
+  // const uniqueFields = makeUniqueColumnNames(fields.map((f) => f.name));
+const uniqueFields = makeUniqueColumnNames2(fields);
   let recordsOffset = headerSize;
   const rows = [];
 
+  // Читаємо дані
   for (let r = 0; r < recordCount; r++) {
     const deletedFlag = view.getUint8(recordsOffset);
     if (deletedFlag === 0x2a) {
@@ -146,49 +179,47 @@ const formatDateForDbf = (value) => {
       recordsOffset += recordSize;
       continue;
     }
-    let recDataOffset = recordsOffset + 1; 
+
+    let recDataOffset = recordsOffset + 1;
     const rowObj = {};
 
-    for (let f of fields) {
-      const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, f.size);
-      recDataOffset += f.size;
-      // let rawText = iconv.decode(Buffer.from(rawBytes), codePage);
+    fields.forEach((field, index) => {
+      const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, field.size);
+      recDataOffset += field.size;
 
-      // Використовуємо TextDecoder для декодування тексту
-      const decoder = new TextDecoder(codePage); 
-      const rawText = decoder.decode(rawBytes);
-
-      if (f.type === "N") {
+      const decoder = new TextDecoder(codePage);
+      const rawText = decoder.decode(rawBytes).trim();
+      // Опрацювання даних залежно від типу поля
+      if (field.type === "N") {
         if (rawText === "") {
-          rowObj[f.name] = null;
+          rowObj[uniqueFields[index].name] = null;
         } else {
           const val = parseFloat(rawText);
-          rowObj[f.name] = isNaN(val) ? rawText : val;
+          rowObj[uniqueFields[index].name] = isNaN(val) ? rawText : val;
         }
-      } else if (f.type === "D") {
-        if (rawText === '        ') {  // 8 символів пробілу
-          rowObj[f.name] = '';  // або null
-        } else if (rawText === '00000000') {
-          rowObj[f.name] = '';
+      } else if (field.type === "D") {
+        if (rawText === "        ") {
+          rowObj[uniqueFields[index].name] = "";
+        } else if (rawText === "00000000") {
+          rowObj[uniqueFields[index].name] = "";
         } else if (rawText.length === 8) {
           const yyyy = rawText.substring(0, 4);
           const mm = rawText.substring(4, 6);
           const dd = rawText.substring(6, 8);
-          rowObj[f.name] = `${dd}.${mm}.${yyyy}`;
+          rowObj[uniqueFields[index].name] = `${dd}.${mm}.${yyyy}`;
         } else {
-          rowObj[f.name] = rawText;
+          rowObj[uniqueFields[index].name] = rawText;
         }
       } else {
-        // C / L / інше
-        rowObj[f.name] = rawText;
+        rowObj[uniqueFields[index].name] = rawText;
       }
-    }
+    });
 
     rows.push(rowObj);
     recordsOffset += recordSize;
   }
 
-  return { fields, rows };
+  return { fields: uniqueFields, rows };
 }
 
 // ----------------------------------------------------------------------------
@@ -390,13 +421,13 @@ export default function App() {
   // інакше – fieldsConfig
   const displayFields = useDbfFieldsFromImported ? fieldsConfigFromDBF : fieldsConfig;
   
-  
   const parseFile = (buffer, ext, encoding) => {
     // Якщо DBF
     if (ext === "dbf") {
       const { fields, rows } = parseDbfFile(buffer, encoding);
       setFieldsConfigFromDBF(fields);
       const colNames = fields.map((f) => f.name);
+
       setColumnOrder(colNames);
       setDecodedData(rows);
       setTableValid(true);
@@ -416,7 +447,7 @@ export default function App() {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const jsonData = utils.sheet_to_json(ws, { defval: "" });
         if (!jsonData || !jsonData.length) {
-          setError("Обраний файл порожній");
+          setError("В обраному файлі табличні дані не знайдено");
           return;
         }
         // Обробляємо можливі дати
@@ -458,7 +489,7 @@ export default function App() {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const jsonData = utils.sheet_to_json(ws, { defval: "" });
         if (!jsonData || !jsonData.length) {
-          setError("Обраний файл порожній");
+          setError("В обраному файлі табличні дані не знайдено");
           return;
         }
         // Обробляємо можливі дати
