@@ -124,14 +124,22 @@ const formatDateForDbf = (value) => {
 // ----------------------------------------------------------------------------
 // Парсинг DBF (читаємо заголовок, поля і записи)
 // ----------------------------------------------------------------------------
-// function parseDbfFile(arrayBuffer) {
 
 function parseDbfFile(arrayBuffer, codePage = "cp866") {
   const view = new DataView(arrayBuffer);
 
-  const recordCount = view.getUint32(4, true);
+  let recordCount = view.getUint32(4, true);
   const headerSize = view.getUint16(8, true);
-  const recordSize = view.getUint16(10, true);
+  let recordSize = view.getUint16(10, true);
+
+  const dataSectionSize = arrayBuffer.byteLength - headerSize;
+
+  // Розрахунок кількості записів, якщо header невірний
+  if (recordCount === 0 || recordSize <= 0 || recordSize > arrayBuffer.byteLength) {
+    recordCount = Math.floor(dataSectionSize / recordSize) || 1;
+    recordSize = Math.floor(dataSectionSize / Math.max(recordCount, 1));
+  }
+
 
   let offset = 32;
   const fields = [];
@@ -165,62 +173,110 @@ function parseDbfFile(arrayBuffer, codePage = "cp866") {
 
     offset += 32;
   }
-
   // const uniqueFields = makeUniqueColumnNames(fields.map((f) => f.name));
 const uniqueFields = makeUniqueColumnNames2(fields);
   let recordsOffset = headerSize;
   const rows = [];
 
   // Читаємо дані
-  for (let r = 0; r < recordCount; r++) {
-    const deletedFlag = view.getUint8(recordsOffset);
-    if (deletedFlag === 0x2a) {
-      // Пропускаємо "видалений" запис
-      recordsOffset += recordSize;
-      continue;
-    }
 
-    let recDataOffset = recordsOffset + 1;
-    const rowObj = {};
-
-    fields.forEach((field, index) => {
-      const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, field.size);
-      recDataOffset += field.size;
-
-      const decoder = new TextDecoder(codePage);
-      const rawText = decoder.decode(rawBytes).trim();
-      // Опрацювання даних залежно від типу поля
-      if (field.type === "N") {
-        if (rawText === "") {
-          rowObj[uniqueFields[index].name] = null;
-        } else {
-          const val = parseFloat(rawText);
-          rowObj[uniqueFields[index].name] = isNaN(val) ? rawText : val;
-        }
-      } else if (field.type === "D") {
-        if (rawText === "        ") {
-          rowObj[uniqueFields[index].name] = "";
-        } else if (rawText === "00000000") {
-          rowObj[uniqueFields[index].name] = "";
-        } else if (rawText.length === 8) {
-          const yyyy = rawText.substring(0, 4);
-          const mm = rawText.substring(4, 6);
-          const dd = rawText.substring(6, 8);
-          rowObj[uniqueFields[index].name] = `${dd}.${mm}.${yyyy}`;
+  if (recordCount > 0 & recordsOffset + recordSize <= arrayBuffer.byteLength) {
+    // Використовуємо цикл for, якщо recordCount коректний
+    for (let r = 0; r < recordCount; r++) {
+      const deletedFlag = view.getUint8(recordsOffset);
+      if (deletedFlag === 0x2a) {
+        // Пропускаємо "видалений" запис
+        recordsOffset += recordSize;
+        continue;
+      }
+      let recDataOffset = recordsOffset + 1;
+      const rowObj = {};
+  
+      fields.forEach((field, index) => {
+        const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, field.size);
+        recDataOffset += field.size;
+  
+        const decoder = new TextDecoder(codePage);
+        const rawText = decoder.decode(rawBytes).trim();
+        // Опрацювання даних залежно від типу поля
+        if (field.type === "N") {
+          if (rawText === "") {
+            rowObj[uniqueFields[index].name] = null;
+          } else {
+            const val = parseFloat(rawText);
+            rowObj[uniqueFields[index].name] = isNaN(val) ? rawText : val;
+          }
+        } else if (field.type === "D") {
+          if (rawText === "        ") {
+            rowObj[uniqueFields[index].name] = "";
+          } else if (rawText === "00000000") {
+            rowObj[uniqueFields[index].name] = "";
+          } else if (rawText.length === 8) {
+            const yyyy = rawText.substring(0, 4);
+            const mm = rawText.substring(4, 6);
+            const dd = rawText.substring(6, 8);
+            rowObj[uniqueFields[index].name] = `${dd}.${mm}.${yyyy}`;
+          } else {
+            rowObj[uniqueFields[index].name] = rawText;
+          }
         } else {
           rowObj[uniqueFields[index].name] = rawText;
         }
-      } else {
-        rowObj[uniqueFields[index].name] = rawText;
+      });
+  
+      rows.push(rowObj);
+      recordsOffset += recordSize;
+    }
+  } else {
+    // Використовуємо цикл while, якщо recordCount некоректний
+    while (recordsOffset + recordSize <= arrayBuffer.byteLength) {
+      const deletedFlag = view.getUint8(recordsOffset);
+      if (deletedFlag === 0x2a) {
+        // Пропускаємо "видалений" запис
+        recordsOffset += recordSize;
+        continue;
       }
-    });
+      let recDataOffset = recordsOffset + 1;
+      const rowObj = {};
 
-    rows.push(rowObj);
-    recordsOffset += recordSize;
+      fields.forEach((field, index) => {
+        const rawBytes = new Uint8Array(arrayBuffer, recDataOffset, field.size);
+        recDataOffset += field.size;
+  
+        const decoder = new TextDecoder(codePage);
+        const rawText = decoder.decode(rawBytes).trim();
+        // Опрацювання даних залежно від типу поля
+        if (field.type === "N") {
+          if (rawText === "") {
+            rowObj[uniqueFields[index].name] = null;
+          } else {
+            const val = parseFloat(rawText);
+            rowObj[uniqueFields[index].name] = isNaN(val) ? rawText : val;
+          }
+        } else if (field.type === "D") {
+          if (rawText === "        ") {
+            rowObj[uniqueFields[index].name] = "";
+          } else if (rawText === "00000000") {
+            rowObj[uniqueFields[index].name] = "";
+          } else if (rawText.length === 8) {
+            const yyyy = rawText.substring(0, 4);
+            const mm = rawText.substring(4, 6);
+            const dd = rawText.substring(6, 8);
+            rowObj[uniqueFields[index].name] = `${dd}.${mm}.${yyyy}`;
+          } else {
+            rowObj[uniqueFields[index].name] = rawText;
+          }
+        } else {
+          rowObj[uniqueFields[index].name] = rawText;
+        }
+      });
+  
+      rows.push(rowObj);
+      recordsOffset += recordSize;    }
   }
-
   return { fields: uniqueFields, rows };
 }
+
 
 // ----------------------------------------------------------------------------
 // Формування DBF (для експорту)
