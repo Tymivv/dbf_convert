@@ -13,7 +13,7 @@ body {
 
 .container {
     padding: 5rem 1rem 1rem 1rem;
-    width: 800px;
+    /* width: 800px; */
     margin: auto auto;
 }
 
@@ -384,4 +384,9 @@ body {
     margin-top: 20px;
     max-width: 100%;
     display: block; /* Забезпечує, що контейнер займає блоковий простір */
+  }
+  .tab table {
+    margin-left: auto;
+    margin-right: auto;
+    width: auto;  /* або можна не задавати width, якщо браузер сам підбере */
   }

@@ -8,6 +8,9 @@ import pako from "pako";
 import { Buffer } from "buffer";
 import { saveAs } from "file-saver";
 import GoogleSheetUploader from "./GoogleSheetUploader/GoogleSheetUploader";
+import GoogleSheetImporter  from "./GoogleSheetImporter/GoogleSheetImporter";
+
+
 import style from "./app.module.css";
 
 // Запобігаємо проблемам із Buffer у браузері
@@ -421,6 +424,7 @@ export default function App() {
 
   // --------------------- ОСНОВНІ СТАНИ ---------------------
   const [decodedData, setDecodedData] = useState([]); 
+  console.log('decodedData:',decodedData);
   const [columnOrder, setColumnOrder] = useState([]);
   const [tableValid, setTableValid] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -627,7 +631,6 @@ export default function App() {
     } catch (err) {
       setError(`Помилка декомпресії: ${err.message}`);
     }
-      // parseFile(fileBuffer, fileExtension, selectedEncoding || "cp866");
   }, [selectedEncoding, fileBuffer, fileExtension]);
 
   // -------------------------------------------------------
@@ -770,7 +773,7 @@ export default function App() {
     }
   };
 // Коли showDbfExport або autoDetectTypes змінюються
-useEffect(() => {
+useEffect(() =>  {
   if (showDbfExport && decodedData.length) {
     initFieldsConfig(decodedData);
   }
@@ -915,8 +918,9 @@ useEffect(() => {
   
     const columns = [];
     for (let i = 0; i < columnCount; i++) {
-      const columnName = prompt(`Введіть назву колонки ${i + 1}:`, `column_${i + 1}`);
-      columns.push(columnName || `column_${i + 1}`);
+      // const columnName = prompt(`Введіть назву колонки ${i + 1}:`, `column_${i + 1}`);
+      // columns.push(columnName || `column_${i + 1}`);
+      columns.push(`column_${i + 1}`);
     }
   
     setColumnOrder(columns); // Встановити порядок колонок
@@ -926,6 +930,22 @@ useEffect(() => {
   };
   
 
+  // Callback, який отримує дані з GoogleSheetImporter
+  // Тут importData – об'єкт { headers, rows }
+  const handleDataImported = (importData) => {
+    if (importData && importData.headers) {
+      // Встановлюємо заголовки таблиці з headers
+      setColumnOrder(importData.headers);
+      // Дані – це rows (можуть бути порожні, якщо були лише заголовки)
+      setDecodedData(importData.rows);
+      setTableValid(true);
+      setCurrentPage(0);
+    } else {
+      setDecodedData([]);
+    }
+    console.log("Отримані дані1:", importData);
+  };
+
   // -------------------------------------------------------
   // Рендер
   // -------------------------------------------------------
@@ -933,14 +953,16 @@ useEffect(() => {
     <div className={style.container}>
       <div className={style.card}>
         <h1>Table Converter</h1>
-        {/* <div>
+        <div>
           <button
             className={style.btn}
             onClick={() => initializeNewTable()}
             >
             Створити порожню таблицю
           </button>
-        </div> */}
+          <GoogleSheetImporter onDataImported={handleDataImported}/>
+        </div>
+        {/* <div><GoogleSheetImporter onDataImported={handleDataImported}/></div> */}
         <input
           type="file"
           style={{ display: "none" }}
