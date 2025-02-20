@@ -424,7 +424,6 @@ export default function App() {
 
   // --------------------- ОСНОВНІ СТАНИ ---------------------
   const [decodedData, setDecodedData] = useState([]); 
-  console.log('decodedData:',decodedData);
   const [columnOrder, setColumnOrder] = useState([]);
   const [tableValid, setTableValid] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);

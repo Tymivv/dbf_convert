@@ -1,21 +1,26 @@
-// GoogleSheetImporter.js
+// GoogleSheetImporter.jsx
 import React, { useState } from 'react';
 import Modal from 'react-modal';
 import style from '../app.module.css';
-import './googleSheetImporter.css'; // стилі для цього компонента (за бажанням)
 /* global chrome */
 
 const GoogleSheetImporter = ({ onDataImported }) => {
-  const [isSignedIn, setIsSignedIn] = useState(false);
-  const [accessToken, setAccessToken] = useState(null);
-  const [statusMessage, setStatusMessage] = useState('');
-  const [spreadsheetIdInput, setSpreadsheetIdInput] = useState('');
-  const [modalIsOpen, setModalIsOpen] = useState(false);
-  const [importedData, setImportedData] = useState([]);
-  const [sheetsList, setSheetsList] = useState([]); // Список листів з таблиці
-  const [selectedSheet, setSelectedSheet] = useState(''); // Обраний лист
 
-  // Функція входу через Google (через chrome.identity)
+const [isSignedIn, setIsSignedIn] = useState(false);// Чи користувач увійшов у систему Google
+const [accessToken, setAccessToken] = useState(null);// Токен доступу (OAuth), який використовується для запитів до API Google
+// Повідомлення для інформування користувача про статус операцій (помилки або успіх)
+const [statusMessage, setStatusMessage] = useState('');
+const [spreadsheetIdInput, setSpreadsheetIdInput] = useState('');// Збереження введеного посилання або ID Google таблиці
+const [sheetsList, setSheetsList] = useState([]);// Список листів (назви листів) з вибраної Google таблиці
+const [selectedSheet, setSelectedSheet] = useState('');// Назва обраного листа, з якого буде імпортовано дані
+const [driveFiles, setDriveFiles] = useState([]);// Список Google таблиць, отриманих із Google Drive (відсортованих за датою змін)
+const [showDriveList, setShowDriveList] = useState(false);// Прапорець, який визначає, чи слід відображати список таблиць з Google Drive
+const [modalIsOpen, setModalIsOpen] = useState(false);// Прапорець, що вказує, чи відкрите модальне вікно імпорту
+
+// Імпортовані дані з Google таблиці (масив об'єктів, де кожен об'єкт представляє рядок)
+const [importedData, setImportedData] = useState([]);
+
+  // Функції входу/виходу (як раніше)
   const signIn = () => {
     chrome.identity.getAuthToken({ interactive: true }, (token) => {
       if (chrome.runtime.lastError) {
@@ -27,14 +32,10 @@ const GoogleSheetImporter = ({ onDataImported }) => {
         setAccessToken(token);
         setIsSignedIn(true);
         setStatusMessage('Ви увійшли через Google.');
-      } else {
-        console.error('Токен OAuth був порожнім');
-        setStatusMessage('Помилка: Токен OAuth був порожнім');
       }
     });
   };
 
-  // Функція виходу
   const signOut = () => {
     if (accessToken) {
       chrome.identity.removeCachedAuthToken({ token: accessToken }, () => {
@@ -48,65 +49,14 @@ const GoogleSheetImporter = ({ onDataImported }) => {
     }
   };
 
-  // Допоміжна функція для вилучення ID таблиці з URL (якщо потрібно)
+  // Допоміжна функція для вилучення ID таблиці з URL або тексту
   const getSpreadsheetIdFromInput = (input) => {
-    // Якщо input містить docs.google.com, спробуємо вилучити ID
     const regex = /\/d\/([a-zA-Z0-9-_]+)/;
     const match = input.match(regex);
-    if (match && match[1]) {
-      return match[1];
-    }
-    // Якщо просто введено ID – повертаємо його
-    return input;
+    return match && match[1] ? match[1] : input;
   };
 
-// const importSpreadsheetData = async () => {
-//   setStatusMessage('Імпорт даних...');
-//   const spreadsheetId = getSpreadsheetIdFromInput(spreadsheetIdInput);
-//   const range = 'Sheet1!A1:Z';
-//   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?majorDimension=ROWS`;
-//   try {
-//     const response = await fetch(url, {
-//       method: 'GET',
-//       headers: {
-//         'Authorization': 'Bearer ' + accessToken,
-//         'Content-Type': 'application/json'
-//       }
-//     });
-//     const data = await response.json();
-//     if (response.ok) {
-//       if (data.values && data.values.length > 0) {
-//         // Перший рядок – це заголовки
-//         const headers = data.values[0];
-//         // Решта рядків – це дані (можуть бути порожні, якщо імпортовано лише один рядок)
-//         const rows = data.values.slice(1);
-//         // Якщо потрібно перетворити рядки в об'єкти:
-//         const imported = rows.map(row => {
-//           const obj = {};
-//           headers.forEach((header, index) => {
-//             obj[header] = row[index] || '';
-//           });
-//           return obj;
-//         });
-//         setImportedData(imported);
-//         setStatusMessage('Дані успішно імпортовано!');
-//         // Передаємо об'єкт з headers та rows навіть якщо rows порожній
-//         if (onDataImported) {
-//           onDataImported({ headers, rows: imported });
-//         }
-//       } else {
-//         setStatusMessage('Таблиця порожня або не містить даних.');
-//       }
-//     } else {
-//       console.error('Помилка імпорту даних:', data);
-//       setStatusMessage(`Помилка: ${data.error.message}`);
-//     }
-//   } catch (error) {
-//     console.error('Помилка під час імпорту:', error);
-//     setStatusMessage('Помилка під час імпорту: ' + error.message);
-//   }
-// };
-  // Функція отримання списку листів з таблиці
+  // Функція для отримання списку листів конкретної таблиці (як раніше)
   const fetchSheetsList = async (spreadsheetId) => {
     setStatusMessage("Отримання списку листів...");
     try {
@@ -122,7 +72,7 @@ const GoogleSheetImporter = ({ onDataImported }) => {
       if (response.ok) {
         const sheets = data.sheets.map(sheet => sheet.properties.title);
         setSheetsList(sheets);
-        setSelectedSheet(sheets[0]); // За замовчуванням обираємо перший лист
+        setSelectedSheet(sheets[0]); // За замовчуванням вибираємо перший лист
         setStatusMessage("Список листів отримано.");
       } else {
         console.error('Помилка отримання списку листів:', data);
@@ -134,7 +84,40 @@ const GoogleSheetImporter = ({ onDataImported }) => {
     }
   };
 
-  // Функція імпорту даних з обраного листа
+  // отримання списку Google таблиць з Google Drive
+  const fetchDriveSpreadsheets = async () => {
+    setStatusMessage("Отримання списку таблиць з Google Drive...");
+    try {
+      const params = new URLSearchParams({
+        q: "mimeType='application/vnd.google-apps.spreadsheet'",
+        orderBy: "modifiedTime desc",
+        pageSize: "10",
+        fields: "files(id, name, modifiedTime)"
+      });
+      const url = `https://www.googleapis.com/drive/v3/files?${params.toString()}`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Authorization": "Bearer " + accessToken,
+          "Content-Type": "application/json"
+        }
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setDriveFiles(data.files);
+        setShowDriveList(true);
+        setStatusMessage("Список таблиць отримано.");
+      } else {
+        console.error('Помилка отримання таблиць:', data);
+        setStatusMessage("Помилка отримання таблиць: " + data.error.message);
+      }
+    } catch (error) {
+      console.error('Помилка отримання таблиць:', error);
+      setStatusMessage("Помилка отримання таблиць: " + error.message);
+    }
+  };
+
+  // Функція імпорту даних з обраного листа таблиці (як раніше)
   const importSpreadsheetData = async () => {
     if (!selectedSheet) {
       setStatusMessage("Оберіть лист для імпорту.");
@@ -142,7 +125,6 @@ const GoogleSheetImporter = ({ onDataImported }) => {
     }
     setStatusMessage('Імпорт даних...');
     const spreadsheetId = getSpreadsheetIdFromInput(spreadsheetIdInput);
-    // Використовуємо обраний лист для формування діапазону
     const range = `${selectedSheet}!A1:Z`;
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?majorDimension=ROWS`;
     try {
@@ -158,7 +140,6 @@ const GoogleSheetImporter = ({ onDataImported }) => {
         if (data.values && data.values.length > 0) {
           const headers = data.values[0];
           const rows = data.values.slice(1);
-          // Перетворюємо рядки у об'єкти
           const imported = rows.map(row => {
             const obj = {};
             headers.forEach((header, index) => {
@@ -168,7 +149,6 @@ const GoogleSheetImporter = ({ onDataImported }) => {
           });
           setImportedData(imported);
           setStatusMessage('Дані успішно імпортовано!');
-          // Викликаємо callback з об'єктом { headers, rows: imported }
           if (onDataImported) {
             onDataImported({ headers, rows: imported });
           }
@@ -191,6 +171,9 @@ const GoogleSheetImporter = ({ onDataImported }) => {
     setImportedData([]);
     setSpreadsheetIdInput('');
     setSheetsList([]);
+    setSelectedSheet('');
+    setDriveFiles([]);
+    setShowDriveList(false);
   };
 
   const closeModal = () => {
@@ -199,117 +182,147 @@ const GoogleSheetImporter = ({ onDataImported }) => {
     setImportedData([]);
     setSpreadsheetIdInput('');
     setSheetsList([]);
+    setSelectedSheet('');
+    setDriveFiles([]);
+    setShowDriveList(false);
   };
 
   return (
     <>
-    <button className={style.btn} onClick={openModal}>
-      Імпорт з Google таблиці
-    </button>
-    <Modal
-      isOpen={modalIsOpen}
-      onRequestClose={closeModal}
-      contentLabel="Google Sheet Importer"
-      ariaHideApp={false}
-      className="Modal"
-      overlayClassName="Overlay"
-    >
-      <div>
-        <button className={style.closeModal} onClick={closeModal}>
-          ✖
-        </button>
-        <h1 style={{ marginBottom: '20px' }}>Імпорт з Google таблиці</h1>
-        {!isSignedIn ? (
-          <button className={style.btn} onClick={signIn}>
-            Увійти за допомогою Google
+      <button className={style.btn} onClick={openModal}>
+        Імпорт з Google таблиці
+      </button>
+      <Modal
+        isOpen={modalIsOpen}
+        onRequestClose={closeModal}
+        contentLabel="Google Sheet Importer"
+        ariaHideApp={false}
+        className="Modal"
+        overlayClassName="Overlay"
+      >
+        <div>
+          <button className={style.closeModal} onClick={closeModal}>
+            ✖
           </button>
-        ) : (
-          <button className={style.btn} onClick={signOut}>
-            Вийти
-          </button>
-        )}
-        {isSignedIn && (
-          <>
-            <div style={{ marginTop: '20px' }}>
-              <label>
-                Введіть посилання або ID таблиці:
-                <input
-                  type="text"
-                  value={spreadsheetIdInput}
-                  onChange={(e) => setSpreadsheetIdInput(e.target.value)}
-                  style={{ width: '95%', padding: '8px', marginTop: '5px' }}
-                />
-              </label>
-            </div>
-            <div style={{ marginTop: '10px' }}>
-              <button
-                className={style.btn}
-                onClick={() =>
-                  fetchSheetsList(getSpreadsheetIdFromInput(spreadsheetIdInput))
-                }
-                disabled={!spreadsheetIdInput}
-              >
-                Отримати список листів
-              </button>
-            </div>
-            {sheetsList.length > 0 && (
-              <div style={{ marginTop: '10px' }}>
+          <h1 style={{ marginBottom: '20px' }}>Імпорт з Google таблиці</h1>
+          {!isSignedIn ? (
+            <button className={style.btn} onClick={signIn}>
+              Увійти за допомогою Google
+            </button>
+          ) : (
+            <button className={style.btn} onClick={signOut}>
+              Вийти
+            </button>
+          )}
+          {isSignedIn && (
+            <>
+              <div style={{ marginTop: '20px' }}>
                 <label>
-                  Оберіть лист:
-                  <select
-                    className={style.btn}
-                    value={selectedSheet}
-                    onChange={(e) => setSelectedSheet(e.target.value)}
+                  Введіть посилання або ID таблиці:
+                  <input
+                    type="text"
+                    value={spreadsheetIdInput}
+                    onChange={(e) => setSpreadsheetIdInput(e.target.value)}
                     style={{ width: '95%', padding: '8px', marginTop: '5px' }}
-                  >
-                    {sheetsList.map((sheetName) => (
-                      <option key={sheetName} value={sheetName}>
-                        {sheetName}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </label>
               </div>
-            )}
-            <div style={{ marginTop: '20px' }}>
-              <button
-                className={style.btn}
-                onClick={importSpreadsheetData}
-                disabled={!selectedSheet}
-              >
-                Імпортувати дані
-              </button>
-            </div>
-          </>
-        )}
-        {statusMessage && <p style={{ marginTop: '20px' }}>{statusMessage}</p>}
-        {importedData && importedData.length > 0 && (
-          <div style={{ marginTop: '20px', maxHeight: '300px', overflowY: 'auto' }}>
-            <h2>Імпортовані дані:</h2>
-            <table className={style.myTable}>
-              <thead>
-                <tr>
-                  {importedData.length > 0 &&
-                    Object.keys(importedData[0]).map((header) => (
-                      <th key={header}>{header}</th>
+              <div style={{ marginTop: '10px' }}>
+                <button className={style.btn} onClick={fetchDriveSpreadsheets}>
+                  Показати список таблиць з Google Drive
+                </button>
+              </div>
+              {showDriveList && driveFiles.length > 0 && (
+                <div style={{ marginTop: '10px' }}>
+                  <h2>Список таблиць:</h2>
+                  <ul style={{ marginTop: 10, overflowX: "auto", maxWidth: "100%", maxHeight:"200px" }}>
+                    {driveFiles.map(file => (
+                      <li style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}key={file.id}>
+                        <div>{file.name} <br />(Останнє редагування: {new Date(file.modifiedTime).toLocaleString()})</div>
+                        <button
+                          className={style.btn}
+                          onClick={() => {
+                            // Встановлюємо ID таблиці з Drive
+                            setSpreadsheetIdInput(file.id);
+                            setShowDriveList(false);
+                            setStatusMessage(`Вибрано таблицю: ${file.name}`);
+                          }}
+                        >
+                          Вибрати
+                        </button>
+                      </li>
                     ))}
-                </tr>
-              </thead>
-              <tbody>
-                {importedData.map((row, index) => (
-                  <tr key={index}>
-                    {Object.values(row).map((cell, idx) => (
-                      <td key={idx}>{cell}</td>
-                    ))}
+                  </ul>
+                </div>
+              )}
+              <div style={{ marginTop: '10px' }}>
+                <button
+                  className={style.btn}
+                  onClick={() =>
+                    fetchSheetsList(getSpreadsheetIdFromInput(spreadsheetIdInput))
+                  }
+                  disabled={!spreadsheetIdInput}
+                >
+                  Отримати список листів
+                </button>
+              </div>
+              {sheetsList.length > 0 && (
+                <div style={{ marginTop: '10px' }}>
+                  <label>
+                    Оберіть лист:
+                    <select
+                      value={selectedSheet}
+                      onChange={(e) => setSelectedSheet(e.target.value)}
+                      style={{ width: '100%', padding: '8px', marginTop: '5px' }}
+                    >
+                      {sheetsList.map((sheetName) => (
+                        <option key={sheetName} value={sheetName}>
+                          {sheetName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+              <div style={{ marginTop: '10px' }}>
+                <button
+                  className={style.btn}
+                  onClick={importSpreadsheetData}
+                  disabled={!selectedSheet && !spreadsheetIdInput}
+                >
+                  Імпортувати дані
+                </button>
+              </div>
+            </>
+          )}
+          {statusMessage && <p style={{ marginTop: '20px' }}>{statusMessage}</p>}
+          {/* {importedData && importedData.length > 0 && (
+            <div style={{ marginTop: '20px', maxHeight: '300px', overflowY: 'auto' }}>
+              <h2>Імпортовані дані:</h2>
+              <table className={style.myTable}>
+                <thead>
+                  <tr>
+                    {importedData.length > 0 &&
+                      Object.keys(importedData).map((header) => (
+                        <th key={header}>{header}</th>
+                      ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </Modal>
-  </>
+                </thead>
+                <tbody>
+                  {importedData.map((row, index) => (
+                    <tr key={index}>
+                      {Object.values(row[0]).map((cell, idx) => (
+                        <td key={idx}>{cell}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )} */}
+        </div>
+      </Modal>
+    </>
   );
 };
 
