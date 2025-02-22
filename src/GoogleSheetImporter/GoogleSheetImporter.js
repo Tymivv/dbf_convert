@@ -1,5 +1,4 @@
-// GoogleSheetImporter.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Modal from 'react-modal';
 import style from '../app.module.css';
 /* global chrome */
@@ -32,9 +31,18 @@ const [importedData, setImportedData] = useState([]);
         setAccessToken(token);
         setIsSignedIn(true);
         setStatusMessage('Ви увійшли через Google.');
+        // Автоматично отримуємо список таблиць з Google Drive
+        
       }
     });
   };
+  useEffect(() => {
+    fetchDriveSpreadsheets();
+  }, [accessToken]);
+
+  useEffect(() => {
+  fetchSheetsList(getSpreadsheetIdFromInput(spreadsheetIdInput))
+}, [spreadsheetIdInput]);
 
   const signOut = () => {
     if (accessToken) {
@@ -56,7 +64,7 @@ const [importedData, setImportedData] = useState([]);
     return match && match[1] ? match[1] : input;
   };
 
-  // Функція для отримання списку листів конкретної таблиці (як раніше)
+  // Функція для отримання списку листів конкретної таблиці
   const fetchSheetsList = async (spreadsheetId) => {
     setStatusMessage("Отримання списку листів...");
     try {
@@ -84,39 +92,45 @@ const [importedData, setImportedData] = useState([]);
     }
   };
 
-  // отримання списку Google таблиць з Google Drive
-  const fetchDriveSpreadsheets = async () => {
-    setStatusMessage("Отримання списку таблиць з Google Drive...");
-    try {
-      const params = new URLSearchParams({
-        q: "mimeType='application/vnd.google-apps.spreadsheet'",
-        orderBy: "modifiedTime desc",
-        pageSize: "10",
-        fields: "files(id, name, modifiedTime)"
-      });
-      const url = `https://www.googleapis.com/drive/v3/files?${params.toString()}`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Authorization": "Bearer " + accessToken,
-          "Content-Type": "application/json"
+   // отримання списку Google таблиць з Google Drive
+ 
+    const fetchDriveSpreadsheets = async () => {
+      setStatusMessage("Отримання списку таблиць з Google Drive...");
+      try {
+        const params = new URLSearchParams({
+          q: "mimeType='application/vnd.google-apps.spreadsheet'",
+          orderBy: "modifiedTime desc",
+          pageSize: "20",
+          fields: "files(id, name, modifiedTime)"
+        });
+        const url = `https://www.googleapis.com/drive/v3/files?${params.toString()}`;
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Authorization": "Bearer " + accessToken,
+            "Content-Type": "application/json"
+          }
+        });
+        const data = await response.json();
+        if (response.ok) {
+          setDriveFiles(data.files);
+          setShowDriveList(true);
+          setStatusMessage("Список таблиць отримано.");
+        } else {
+          // console.error('Помилка отримання таблиць:', data);
+          // setStatusMessage("Помилка отримання таблиць: " + data.error.message);
+          setStatusMessage("Помилка отримання таблиць");
         }
-      });
-      const data = await response.json();
-      if (response.ok) {
-        setDriveFiles(data.files);
-        setShowDriveList(true);
-        setStatusMessage("Список таблиць отримано.");
-      } else {
-        console.error('Помилка отримання таблиць:', data);
-        setStatusMessage("Помилка отримання таблиць: " + data.error.message);
+      } catch (error) {
+        // console.error('Помилка отримання таблиць:', error);
+        // setStatusMessage("Помилка отримання таблиць: " + error.message);
+        setStatusMessage("Помилка отримання таблиць");
       }
-    } catch (error) {
-      console.error('Помилка отримання таблиць:', error);
-      setStatusMessage("Помилка отримання таблиць: " + error.message);
-    }
-  };
+    };
+  
 
+ 
+  
   // Функція імпорту даних з обраного листа таблиці (як раніше)
   const importSpreadsheetData = async () => {
     if (!selectedSheet) {
@@ -166,13 +180,13 @@ const [importedData, setImportedData] = useState([]);
   };
 
   const openModal = () => {
-    setModalIsOpen(true);
+    setModalIsOpen(true); 
     setStatusMessage('');
     setImportedData([]);
     setSpreadsheetIdInput('');
     setSheetsList([]);
     setSelectedSheet('');
-    setDriveFiles([]);
+    // setDriveFiles([]);
     setShowDriveList(false);
   };
 
@@ -183,7 +197,7 @@ const [importedData, setImportedData] = useState([]);
     setSpreadsheetIdInput('');
     setSheetsList([]);
     setSelectedSheet('');
-    setDriveFiles([]);
+    // setDriveFiles([]);
     setShowDriveList(false);
   };
 
@@ -217,28 +231,29 @@ const [importedData, setImportedData] = useState([]);
           {isSignedIn && (
             <>
               <div style={{ marginTop: '20px' }}>
-                <label>
-                  Введіть посилання або ID таблиці:
+                <h2>Введіть посилання або ID таблиці:</h2>
+                  
                   <input
                     type="text"
                     value={spreadsheetIdInput}
                     onChange={(e) => setSpreadsheetIdInput(e.target.value)}
                     style={{ width: '95%', padding: '8px', marginTop: '5px' }}
                   />
-                </label>
+                
               </div>
-              <div style={{ marginTop: '10px' }}>
+              {/* <div style={{ marginTop: '10px' }}>
                 <button className={style.btn} onClick={fetchDriveSpreadsheets}>
                   Показати список таблиць з Google Drive
                 </button>
-              </div>
-              {showDriveList && driveFiles.length > 0 && (
+              </div> */}
+              {/* {showDriveList && driveFiles.length > 0 && ( */}
+              {driveFiles.length > 0 && (
                 <div style={{ marginTop: '10px' }}>
-                  <h2>Список таблиць:</h2>
+                  <h2>Список таблиць з Google Drive:</h2>
                   <ul style={{ marginTop: 10, overflowX: "auto", maxWidth: "100%", maxHeight:"200px" }}>
                     {driveFiles.map(file => (
                       <li style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}key={file.id}>
-                        <div>{file.name} <br />(Останнє редагування: {new Date(file.modifiedTime).toLocaleString()})</div>
+                        <div style={{ textAlign: 'left',width: '95%', wordBreak: 'break-word' }}>{file.name} <br />(Останнє редагування: {new Date(file.modifiedTime).toLocaleString()})</div>
                         <button
                           className={style.btn}
                           onClick={() => {
@@ -255,7 +270,7 @@ const [importedData, setImportedData] = useState([]);
                   </ul>
                 </div>
               )}
-              <div style={{ marginTop: '10px' }}>
+              {/* <div style={{ marginTop: '10px' }}>
                 <button
                   className={style.btn}
                   onClick={() =>
@@ -265,11 +280,11 @@ const [importedData, setImportedData] = useState([]);
                 >
                   Отримати список листів
                 </button>
-              </div>
+              </div> */}
               {sheetsList.length > 0 && (
-                <div style={{ marginTop: '10px' }}>
-                  <label>
-                    Оберіть лист:
+                <div style={{ marginTop: '20px' }}>
+
+                    <h2>Оберіть лист:</h2>
                     <select
                       value={selectedSheet}
                       onChange={(e) => setSelectedSheet(e.target.value)}
@@ -281,9 +296,10 @@ const [importedData, setImportedData] = useState([]);
                         </option>
                       ))}
                     </select>
-                  </label>
+
                 </div>
               )}
+              {selectedSheet && (
               <div style={{ marginTop: '10px' }}>
                 <button
                   className={style.btn}
@@ -293,6 +309,7 @@ const [importedData, setImportedData] = useState([]);
                   Імпортувати дані
                 </button>
               </div>
+              )}
             </>
           )}
           {statusMessage && <p style={{ marginTop: '20px' }}>{statusMessage}</p>}
