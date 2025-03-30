@@ -129,6 +129,10 @@ const formatDateForDbf = (value) => {
 // ----------------------------------------------------------------------------
 
 function parseDbfFile(arrayBuffer, codePage = "cp866") {
+
+  if (arrayBuffer.byteLength < 32) {
+    throw new Error("Файл DBF занадто короткий або порожній");
+  }
   const view = new DataView(arrayBuffer);
 
   let recordCount = view.getUint32(4, true);
@@ -138,11 +142,44 @@ function parseDbfFile(arrayBuffer, codePage = "cp866") {
   const dataSectionSize = arrayBuffer.byteLength - headerSize;
 
   // Розрахунок кількості записів, якщо header невірний
-  if (recordCount === 0 || recordSize <= 0 || recordSize > arrayBuffer.byteLength) {
-    recordCount = Math.floor(dataSectionSize / recordSize) || 1;
-    recordSize = Math.floor(dataSectionSize / Math.max(recordCount, 1));
-  }
+  //   if (recordCount === 0 || recordSize <= 0 || recordSize > arrayBuffer.byteLength) {
+  //     recordCount = Math.floor(dataSectionSize / recordSize) || 1;
+  //     recordSize = Math.floor(dataSectionSize / Math.max(recordCount, 1));
+  // }
 
+// ------
+
+// 1. Якщо recordSize <= 0 або занадто великий, некоректний
+if (recordSize <= 0 || recordSize > arrayBuffer.byteLength) {
+  throw new Error("Пошкоджений DBF");
+}
+
+// 2. Якщо (recordCount === 0) і dataSectionSize > 0, 
+//    в заголовку recordCount некоректний 
+
+if (recordCount === 0 && dataSectionSize >= recordSize) {
+  // битий заголовок, рахуємо:
+  const possibleRecords = Math.floor(dataSectionSize / recordSize);
+  if (possibleRecords > 0) {
+    console.warn(
+      `У заголовку зазначено recordCount=0, але розділ даних може вмістити ${possibleRecords} записів.`
+    );
+    recordCount = possibleRecords;
+  }
+}
+
+// 3. Перевірка, чи достатньо місця для оголошеної кількості записів
+//    Якщо recordCount > 0, але dataSectionSize < recordCount*recordSize – теж проблема
+const neededBytes = recordCount * recordSize;
+if (neededBytes > dataSectionSize) {
+  const maxFit = Math.floor(dataSectionSize / recordSize);
+  console.warn(
+    `У заголовку recordCount=${recordCount}, а реально можна вмістити лише ${maxFit} записів. Зменшуємо recordCount`
+  );
+  recordCount = maxFit;
+}
+
+// ------
 
   let offset = 32;
   const fields = [];
@@ -437,22 +474,32 @@ export default function App() {
   const [rowsPerPage, setRowsPerPage] = useState(10); 
   const [currentPage, setCurrentPage] = useState(0);  
 
+  // --------------------- СОРТУВАННЯ--------------------
+  const [sortColumn, setSortColumn] = useState(null);
+  const [sortOrder, setSortOrder] = useState("asc");
+
+  // -------------------- ФІЛЬТР------------------------
+  // pendingFilters – те, що користувач набирає перед натисканням кнопки
+  const [pendingFilters, setPendingFilters] = useState({});
+  // activeFilters – те, що вже застосовано (натиснута кнопка "Filter")
+  const [activeFilters, setActiveFilters] = useState({});
+
     // ---- ДОДАНО для модального вікна (видалення колонок) ----
     const [showColumnModal, setShowColumnModal] = useState(false);
 
   // Підрахунок сторінок
-  const totalPages = Math.ceil(decodedData.length / rowsPerPage);
-  const startIndex = currentPage * rowsPerPage;
-  const endIndex = startIndex + rowsPerPage;
-  const currentRows = decodedData.slice(startIndex, endIndex);
+  // const totalPages = Math.ceil(decodedData.length / rowsPerPage);
+  // const startIndex = currentPage * rowsPerPage;
+  // const endIndex = startIndex + rowsPerPage;
+  // const currentRows = decodedData.slice(startIndex, endIndex);
 
 
-  const goToFirstPage = () => setCurrentPage(0);
-  const goToPreviousPage = () =>
-    setCurrentPage((prev) => (prev > 0 ? prev - 1 : 0));
-  const goToNextPage = () =>
-    setCurrentPage((prev) => (prev < totalPages - 1 ? prev + 1 : prev));
-  const goToLastPage = () => setCurrentPage(totalPages - 1);
+  // const goToFirstPage = () => setCurrentPage(0);
+  // const goToPreviousPage = () =>
+  //   setCurrentPage((prev) => (prev > 0 ? prev - 1 : 0));
+  // const goToNextPage = () =>
+  //   setCurrentPage((prev) => (prev < totalPages - 1 ? prev + 1 : prev));
+  // const goToLastPage = () => setCurrentPage(totalPages - 1);
 
   // Якщо змінюємо кількість рядків, повертаємось на першу сторінку
   useEffect(() => {
@@ -481,6 +528,7 @@ export default function App() {
   const displayFields = useDbfFieldsFromImported ? fieldsConfigFromDBF : fieldsConfig;
   
   const parseFile = (buffer, ext, encoding) => {
+
     // Якщо DBF
     if (ext === "dbf") {
       const { fields, rows } = parseDbfFile(buffer, encoding);
@@ -601,6 +649,7 @@ export default function App() {
     setUploadedFileName(file.name);
     setError(null);
     const ext = file.name.split(".").pop().toLowerCase();
+
     setFileExtension(ext);
     try {
       const arrayBuffer = await file.arrayBuffer(); // Отримуємо ArrayBuffer
@@ -628,7 +677,7 @@ export default function App() {
       parseFile(displayData, fileExtension, selectedEncoding); // Передаємо ArrayBuffer у parseFile
       displayData = compressData(displayData); // Стискаємо дані
     } catch (err) {
-      setError(`Помилка декомпресії: ${err.message}`);
+      setError(`Помилка читання/парсингу: ${err.message}`);
     }
   }, [selectedEncoding, fileBuffer, fileExtension]);
 
@@ -942,7 +991,127 @@ useEffect(() =>  {
     } else {
       setDecodedData([]);
     }
-    console.log("Отримані дані1:", importData);
+  };
+
+
+
+
+// -------------------------------------------------------------
+  //               ФУНКЦІЯ СОРТУВАННЯ
+  // -------------------------------------------------------------
+  const handleSort = (colName, order) => {
+    // Користувач натиснув стрілку вгору (asc) або вниз (desc)
+    setSortColumn(colName);
+    setSortOrder(order);
+    // Повертаємось на першу сторінку, щоб відобразити початок відсортованих результатів
+    setCurrentPage(0);
+  };
+
+  function getSortedData(rows) {
+    if (!sortColumn) return rows;
+  
+    const sorted = [...rows];
+    sorted.sort((a, b) => {
+      const valA = a[sortColumn];
+      const valB = b[sortColumn];
+  
+      // Приводимо до рядка
+      const strA = (valA ?? "").toString();
+      const strB = (valB ?? "").toString();
+  
+      // 1) Чи вони дати формату DD.MM.YYYY?
+      const dateRegex = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+      const matchA = strA.match(dateRegex);
+      const matchB = strB.match(dateRegex);
+  
+      if (matchA && matchB) {
+        // Якщо обидва - дати
+        const dateObjA = new Date(
+          `${matchA[3]}-${matchA[2].padStart(2, "0")}-${matchA[1].padStart(2, "0")}`
+        );
+        const dateObjB = new Date(
+          `${matchB[3]}-${matchB[2].padStart(2, "0")}-${matchB[1].padStart(2, "0")}`
+        );
+        return sortOrder === "asc"
+          ? dateObjA - dateObjB
+          : dateObjB - dateObjA;
+      } else if (matchA && !matchB) {
+        // Одне поле - дата, інше - ні; вирішуйте, як порівнювати
+        return sortOrder === "asc" ? -1 : 1;
+      } else if (!matchA && matchB) {
+        return sortOrder === "asc" ? 1 : -1;
+      }
+  
+      // 2) Якщо не дати, пробуємо числа
+      const numA = parseFloat(strA);
+      const numB = parseFloat(strB);
+      const bothNumeric = !isNaN(numA) && !isNaN(numB);
+  
+      if (bothNumeric) {
+        // Сортуємо як числа
+        return sortOrder === "asc" ? numA - numB : numB - numA;
+      }
+  
+      // 3) Якщо ні дати, ні числа – сортуємо як рядки
+      if (strA < strB) return sortOrder === "asc" ? -1 : 1;
+      if (strA > strB) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+  
+    return sorted;
+  }
+
+  // -------------------------------------------------------------
+  //               ФУНКЦІЯ ФІЛЬТРУВАННЯ
+  // -------------------------------------------------------------
+  function getFilteredData(rows) {
+    let filteredRows = [...rows];
+    for (const col of Object.keys(activeFilters)) {
+      const filterVal = activeFilters[col]?.trim();
+      if (!filterVal) continue; // порожній фільтр
+      
+      filteredRows = filteredRows.filter((row) => {
+        const cellVal = row[col] ?? "";
+        return cellVal.toString().toLowerCase().includes(filterVal.toLowerCase());
+      });
+    }
+    return filteredRows;
+  }
+
+  // Функція, що об'єднує фільтрування і сортування
+  const finalFiltered = getFilteredData(decodedData);
+  const finalSorted = getSortedData(finalFiltered);
+
+  // Пагінація
+  const totalPages = Math.ceil(finalSorted.length / rowsPerPage);
+  const startIndex = currentPage * rowsPerPage;
+  const endIndex = startIndex + rowsPerPage;
+  const currentRows = finalSorted.slice(startIndex, endIndex);
+
+  const goToFirstPage = () => setCurrentPage(0);
+  const goToPreviousPage = () => setCurrentPage((prev) => Math.max(0, prev - 1));
+  const goToNextPage = () => setCurrentPage((prev) => (prev < totalPages - 1 ? prev + 1 : prev));
+  const goToLastPage = () => setCurrentPage(totalPages - 1);
+
+  // -------------------------------------------------------------
+  //  ОНОВЛЕННЯ ФІЛЬТРІВ
+  // -------------------------------------------------------------
+  const handleFilterInputChange = (col, newValue) => {
+    setPendingFilters((prev) => ({ ...prev, [col]: newValue }));
+  };
+
+  const applyFilterForColumn = (col) => {
+    setActiveFilters((prev) => ({
+      ...prev,
+      [col]: (pendingFilters[col] ?? "").trim(),
+    }));
+    setCurrentPage(0);
+  };
+
+  const clearFilterForColumn = (col) => {
+    setPendingFilters((prev) => ({ ...prev, [col]: "" }));
+    setActiveFilters((prev) => ({ ...prev, [col]: "" }));
+    setCurrentPage(0);
   };
 
   // -------------------------------------------------------
@@ -1251,8 +1420,8 @@ useEffect(() =>  {
             <div className={style.tab} style={{ marginTop: 20, overflowX: "auto", maxWidth: "100%" }}>
               <table className={style.myTable}>
                 <thead>
+                  {/* Рядок із назвами колонок (з можливістю кліка для сортування) */}
                   <tr>
-                    {/* Шапка з колонками */}
                     {columnOrder.map((col) => (
                       <th key={col}>
                         <div
@@ -1267,10 +1436,43 @@ useEffect(() =>  {
                           }}
                           >
                             {col}
-                          </div>
+                            </div>
+                              <button 
+                              style={{
+                                // Якщо зараз ця колонка відсортована за ASC:
+                                color: sortColumn === col && sortOrder === "asc" ? "red" : "inherit",
+                              }}
+                              onClick={() => handleSort(col, "asc")}>▲</button>
+                              <button 
+                              style={{
+                                // Якщо зараз ця колонка відсортована за DESC:
+                                color: sortColumn === col && sortOrder === "desc" ? "red" : "inherit",
+                              }}
+                              onClick={() => handleSort(col, "desc")}>▼</button>
                         </th>
                       ))}
                     <th></th>
+                  </tr>
+                   {/* Рядок із фільтрами */}
+                  <tr>
+                    {columnOrder.map((col) => (
+                      <th key={col}>
+                        <div style={{ display: "flex", gap: "4px" }}>
+                          <input
+                            type="text"
+                            placeholder="Фільтр..."
+                            value={pendingFilters[col] || ""}
+                            onChange={(e) => handleFilterInputChange(col, e.target.value)}
+                            style={{ width: "80px" }}
+                          />
+                        <button onClick={() => applyFilterForColumn(col)}>✓</button>
+                        {activeFilters[col] && activeFilters[col].length > 0 && (
+                        <button onClick={() => clearFilterForColumn(col)}>✕</button>
+                        )}
+                        </div>
+                        </th>
+                        ))}
+                    <th> </th>
                   </tr>
                 </thead>
                 <tbody>
